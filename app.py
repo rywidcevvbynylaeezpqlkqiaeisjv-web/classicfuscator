@@ -12,8 +12,10 @@ app = Flask(__name__)
 # Enable ProxyFix so Flask recognizes HTTPS behind Render/Cloudflare proxies
 app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1, x_prefix=1)
 
-# In-memory storage for raw obfuscated scripts
-SCRIPT_CACHE = {}
+# Persistent storage folder on server disk
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+SAVED_DIR = os.path.join(BASE_DIR, "saved_scripts")
+os.makedirs(SAVED_DIR, exist_ok=True)
 
 
 def random_id(prefix=""):
@@ -47,7 +49,6 @@ def obfuscate_lua(code: str) -> str:
     for idx, byte in enumerate(raw_bytes):
         current_key = (current_key * k_mult + k_inc) % 256
         rotated = ror(byte, k_shift)
-        # Match 0-indexed pos_key
         enc = (rotated ^ current_key ^ k_mask ^ ((idx + 13) % 256)) % 256
         encrypted_bytes.append(enc)
 
@@ -80,8 +81,8 @@ def obfuscate_lua(code: str) -> str:
     v_test_fn = random_id("tfn")
     v_test_err = random_id("terr")
 
-    # 5. Corrected Luau Stub (Aligned 0-indexed byte offset)
-    lua_stub = f"""--[[ Classicfuscator v3 - Fixed Alignment ]]--
+    # 5. Corrected Luau Stub
+    lua_stub = f"""--[[ Classicfuscator v3 - Persistent Fixed ]]--
 return (function(...)
     local {v_seed} = {k_seed}
     local {v_mult} = {k_mult}
@@ -135,7 +136,6 @@ return (function(...)
             {v_state} = ({v_state} * {v_mult} + {v_inc}) % 256
             local raw = chunk[b_idx]
             
-            -- FIX: Alignment offset (v_idx - 1) matches Python 0-indexed loop
             local pos_key = ({v_idx} + 13) % 256
             {v_idx} = {v_idx} + 1
             
@@ -348,7 +348,10 @@ def process():
     clean_filename = sanitize_filename(raw_filename)
     obfuscated_code = obfuscate_lua(raw_code)
     
-    SCRIPT_CACHE[clean_filename] = obfuscated_code
+    # Save directly to server disk
+    file_path = os.path.join(SAVED_DIR, clean_filename)
+    with open(file_path, "w", encoding="utf-8") as f:
+        f.write(obfuscated_code)
     
     # Enforce HTTPS protocol for Roblox game:HttpGet
     domain_url = request.host_url.rstrip("/")
@@ -366,9 +369,13 @@ def process():
 
 @app.route("/<filename>", methods=["GET"])
 def serve_script(filename):
-    code = SCRIPT_CACHE.get(filename)
-    if not code:
-        return Response("-- Error: Script not found or server restarted.", status=404, mimetype="text/plain")
+    file_path = os.path.join(SAVED_DIR, filename)
+    
+    if not os.path.exists(file_path):
+        return Response("-- Error: Script not found on server disk.", status=404, mimetype="text/plain")
+    
+    with open(file_path, "r", encoding="utf-8") as f:
+        code = f.read()
     
     res = Response(code, mimetype="text/plain")
     res.headers["Access-Control-Allow-Origin"] = "*"
