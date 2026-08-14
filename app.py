@@ -82,8 +82,8 @@ def obfuscate_lua(code: str) -> str:
     v_test_fn = random_id("tfn")
     v_test_err = random_id("terr")
 
-    # 5. Corrected Luau Stub
-    lua_stub = f"""--[[ Classicfuscator v3 ]]--
+    # 5. Zero-Warning Luau Stub
+    lua_stub = f"""--[[ Classicfuscator v3 - Zero Warning Edition ]]--
 return (function(...)
     local {v_seed} = {k_seed}
     local {v_mult} = {k_mult}
@@ -92,15 +92,15 @@ return (function(...)
     local {v_mask} = {k_mask}
     local {v_chunks} = {chunks_lua}
 
-    local {v_env} = (getgenv and getgenv()) or (getfenv and getfenv()) or _ENV or _G
+    local {v_env} = (getgenv and getgenv()) or _ENV or _G
     local {v_loader} = {v_env}.loadstring or load
 
     -- Smart Anti-Hook Check
     if type({v_loader}) ~= "function" then
-        error("[Classicfuscator] Missing loader capability.", 0)
+        return
     end
 
-    local {v_test_fn}, {v_test_err} = {v_loader}("return true", "@test")
+    local {v_test_fn}, {v_test_err} = {v_loader}("return true", "=[test]")
     if type({v_test_fn}) ~= "function" or {v_test_fn}() ~= true then
         return (function() end)()
     end
@@ -149,15 +149,12 @@ return (function(...)
         end
     end
 
-    local {v_res}, {v_err} = {v_loader}({v_concat}({v_out}), "@Classicfuscator")
+    local {v_res}, {v_err} = {v_loader}({v_concat}({v_out}), "=[Classicfuscator]")
 
     if type({v_res}) == "function" then
-        if setfenv and type({v_env}) == "table" then
-            pcall(setfenv, {v_res}, {v_env})
-        end
         return {v_res}(...)
     else
-        error("[Classicfuscator] Execution Error: " .. tostring({v_err}), 0)
+        error("[Classicfuscator] Syntax Error: " .. tostring({v_err}), 0)
     end
 end)(...)"""
 
@@ -195,15 +192,13 @@ HTML_TEMPLATE = """<!DOCTYPE html>
         .section-label { font-size: 14px; font-weight: 600; color: #475569; margin-bottom: 8px; display: block; }
         .text-input { width: 100%; padding: 12px 14px; border: 1px solid #cbd5e1; border-radius: 10px; font-size: 14px; outline: none; }
         .text-input:focus { border-color: #0070f3; box-shadow: 0 0 0 3px rgba(0, 112, 243, 0.15); }
-        textarea { width: 100%; height: 150px; border: 1px solid #cbd5e1; border-radius: 12px; padding: 14px; font-family: "Fira Code", monospace, sans-serif; font-size: 13px; resize: vertical; outline: none; background-color: #ffffff; color: #0f172a; }
+        textarea { width: 100%; height: 160px; border: 1px solid #cbd5e1; border-radius: 12px; padding: 14px; font-family: "Fira Code", monospace, sans-serif; font-size: 13px; resize: vertical; outline: none; background-color: #ffffff; color: #0f172a; }
         textarea:focus { border-color: #0070f3; box-shadow: 0 0 0 3px rgba(0, 112, 243, 0.15); }
         .btn { width: 100%; padding: 14px; background-color: #0070f3; color: white; border: none; border-radius: 10px; font-size: 15px; font-weight: 700; cursor: pointer; margin-top: 14px; box-shadow: 0 4px 14px rgba(0, 112, 243, 0.25); transition: all 0.2s ease; }
         .btn:hover { background-color: #005bb5; transform: translateY(-1px); }
         .btn-copy-loader { background-color: #0070f3; }
-        .btn-copy-code { background-color: #10b981; box-shadow: 0 4px 14px rgba(16, 185, 129, 0.25); }
-        .btn-copy-code:hover { background-color: #059669; }
         .output-container { margin-top: 24px; display: none; }
-        .loader-box { background: #f0f7ff; border: 1px solid #0070f3; border-radius: 12px; padding: 16px; margin-bottom: 16px; }
+        .loader-box { background: #f0f7ff; border: 1px solid #0070f3; border-radius: 12px; padding: 16px; }
     </style>
 </head>
 <body>
@@ -227,13 +222,9 @@ HTML_TEMPLATE = """<!DOCTYPE html>
         <div class="output-container" id="outputWrapper">
             <div class="loader-box">
                 <span class="section-label" style="color: #0070f3; font-weight: 700;">🚀 Roblox Loader Script:</span>
-                <textarea id="loaderOutput" style="height: 60px;" readonly></textarea>
+                <textarea id="loaderOutput" style="height: 70px;" readonly></textarea>
                 <button class="btn btn-copy-loader" onclick="copyLoader()">Copy Roblox Loader</button>
             </div>
-
-            <span class="section-label">Full Obfuscated Code:</span>
-            <textarea id="output" readonly></textarea>
-            <button class="btn btn-copy-code" onclick="copyOutput()">Copy Full Obfuscated Code</button>
         </div>
     </div>
 
@@ -296,12 +287,10 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             const inputCode = document.getElementById('input').value;
             const filename = document.getElementById('filenameInput').value;
             const outputWrapper = document.getElementById('outputWrapper');
-            const outputArea = document.getElementById('output');
             const loaderArea = document.getElementById('loaderOutput');
             
             outputWrapper.style.display = "block";
-            outputArea.value = "-- Obfuscating code, please wait...";
-            loaderArea.value = "-- Generating loader...";
+            loaderArea.value = "-- Obfuscating & generating loader, please wait...";
 
             try {
                 const response = await fetch('/obfuscate', {
@@ -311,12 +300,10 @@ HTML_TEMPLATE = """<!DOCTYPE html>
                 });
 
                 const data = await response.json();
-                outputArea.value = data.result || "-- Error processing script.";
                 loaderArea.value = data.loader || "-- Error generating loader.";
                 playAmbientChime();
             } catch (err) {
-                outputArea.value = "-- Request failed: " + err;
-                loaderArea.value = "-- Loader generation failed.";
+                loaderArea.value = "-- Loader generation failed: " + err;
             }
         }
 
@@ -326,14 +313,6 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             loaderArea.select();
             navigator.clipboard.writeText(loaderArea.value);
             alert('Roblox Loader copied to clipboard!');
-        }
-
-        function copyOutput() {
-            playBubblePop();
-            const outputArea = document.getElementById('output');
-            outputArea.select();
-            navigator.clipboard.writeText(outputArea.value);
-            alert('Obfuscated source code copied to clipboard!');
         }
     </script>
 </body>
@@ -355,10 +334,10 @@ def process():
     clean_filename = sanitize_filename(raw_filename)
     obfuscated_code = obfuscate_lua(raw_code)
     
-    # Save to RAM
+    # Save to RAM Cache
     SCRIPT_CACHE[clean_filename] = obfuscated_code
     
-    # Save to Disk
+    # Save to Disk Storage
     file_path = os.path.join(SAVED_DIR, clean_filename)
     with open(file_path, "w", encoding="utf-8") as f:
         f.write(obfuscated_code)
@@ -368,10 +347,9 @@ def process():
     if domain_url.startswith("http://") and not ("127.0.0.1" in domain_url or "localhost" in domain_url):
         domain_url = domain_url.replace("http://", "https://", 1)
 
-    loader_script = f'loadstring(game:HttpGet("{domain_url}/{clean_filename}", true))()'
+    loader_script = f'loadstring(game:HttpGet("{domain_url}/{clean_filename}"))()'
 
     return jsonify({
-        "result": obfuscated_code,
         "loader": loader_script,
         "filename": clean_filename
     })
@@ -379,7 +357,7 @@ def process():
 
 @app.route("/<path:filename>", methods=["GET"])
 def serve_script(filename):
-    """Smart Fallback Route to prevent 404 under all circumstances."""
+    """Smart Fallback Route to serve obfuscated scripts to Roblox."""
     possible_names = [
         filename,
         filename + ".lua" if not filename.endswith(".lua") else filename,
