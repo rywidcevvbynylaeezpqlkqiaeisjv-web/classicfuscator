@@ -372,10 +372,10 @@ def process():
     clean_filename = sanitize_filename(raw_filename)
     obfuscated_code = obfuscate_lua(raw_code)
     
-    # Save to RAM Cache
+    # Save to RAM
     SCRIPT_CACHE[clean_filename] = obfuscated_code
     
-    # Save to Disk Storage
+    # Save to Disk
     file_path = os.path.join(SAVED_DIR, clean_filename)
     with open(file_path, "w", encoding="utf-8") as f:
         f.write(obfuscated_code)
@@ -395,13 +395,14 @@ def process():
 
 @app.route("/<path:filename>", methods=["GET"])
 def serve_script(filename):
+    """Serves the obfuscated script payload to Roblox when requested."""
     possible_names = [
         filename,
         filename + ".lua" if not filename.endswith(".lua") else filename,
         filename.replace(".lua", "") + ".lua"
     ]
     
-    # Check RAM Cache first
+    # Check RAM Cache
     for name in possible_names:
         if name in SCRIPT_CACHE:
             res = Response(SCRIPT_CACHE[name], mimetype="text/plain")
@@ -409,7 +410,7 @@ def serve_script(filename):
             res.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
             return res
 
-    # Check Disk Storage second
+    # Check Disk Storage
     for name in possible_names:
         file_path = os.path.join(SAVED_DIR, name)
         if os.path.exists(file_path):
