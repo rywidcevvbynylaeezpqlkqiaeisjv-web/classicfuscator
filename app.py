@@ -12,7 +12,8 @@ app = Flask(__name__)
 # Enable ProxyFix so Flask recognizes HTTPS behind Render/Cloudflare proxies
 app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1, x_prefix=1)
 
-# Persistent storage folder on server disk
+# Dual-storage setup (RAM + Disk)
+SCRIPT_CACHE = {}
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 SAVED_DIR = os.path.join(BASE_DIR, "saved_scripts")
 os.makedirs(SAVED_DIR, exist_ok=True)
@@ -82,7 +83,7 @@ def obfuscate_lua(code: str) -> str:
     v_test_err = random_id("terr")
 
     # 5. Corrected Luau Stub
-    lua_stub = f"""--[[ Classicfuscator v3 - Persistent Fixed ]]--
+    lua_stub = f"""--[[ Classicfuscator v3 ]]--
 return (function(...)
     local {v_seed} = {k_seed}
     local {v_mult} = {k_mult}
@@ -164,12 +165,18 @@ end)(...)"""
 
 
 def sanitize_filename(name: str) -> str:
-    name = re.sub(r"[^a-zA-Z0-9_-]", "_", name.strip())
-    if not name:
-        name = "script_" + str(uuid.uuid4())[:6]
-    if not name.endswith(".lua"):
-        name += ".lua"
-    return name
+    """Properly preserves .lua extension without double-extension bugs."""
+    name = name.strip()
+    if name.endswith(".lua"):
+        base = name[:-4]
+    else:
+        base = name
+    
+    clean_base = re.sub(r"[^a-zA-Z0-9_-]", "_", base)
+    if not clean_base:
+        clean_base = "script_" + str(uuid.uuid4())[:6]
+        
+    return clean_base + ".lua"
 
 
 HTML_TEMPLATE = """<!DOCTYPE html>
@@ -348,12 +355,15 @@ def process():
     clean_filename = sanitize_filename(raw_filename)
     obfuscated_code = obfuscate_lua(raw_code)
     
-    # Save directly to server disk
+    # Save to RAM
+    SCRIPT_CACHE[clean_filename] = obfuscated_code
+    
+    # Save to Disk
     file_path = os.path.join(SAVED_DIR, clean_filename)
     with open(file_path, "w", encoding="utf-8") as f:
         f.write(obfuscated_code)
     
-    # Enforce HTTPS protocol for Roblox game:HttpGet
+    # Enforce HTTPS
     domain_url = request.host_url.rstrip("/")
     if domain_url.startswith("http://") and not ("127.0.0.1" in domain_url or "localhost" in domain_url):
         domain_url = domain_url.replace("http://", "https://", 1)
@@ -367,20 +377,35 @@ def process():
     })
 
 
-@app.route("/<filename>", methods=["GET"])
+@app.route("/<path:filename>", methods=["GET"])
 def serve_script(filename):
-    file_path = os.path.join(SAVED_DIR, filename)
+    """Smart Fallback Route to prevent 404 under all circumstances."""
+    possible_names = [
+        filename,
+        filename + ".lua" if not filename.endswith(".lua") else filename,
+        filename.replace(".lua", "") + ".lua"
+    ]
     
-    if not os.path.exists(file_path):
-        return Response("-- Error: Script not found on server disk.", status=404, mimetype="text/plain")
-    
-    with open(file_path, "r", encoding="utf-8") as f:
-        code = f.read()
-    
-    res = Response(code, mimetype="text/plain")
-    res.headers["Access-Control-Allow-Origin"] = "*"
-    res.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
-    return res
+    # Check RAM Cache first
+    for name in possible_names:
+        if name in SCRIPT_CACHE:
+            res = Response(SCRIPT_CACHE[name], mimetype="text/plain")
+            res.headers["Access-Control-Allow-Origin"] = "*"
+            res.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+            return res
+
+    # Check Disk Storage second
+    for name in possible_names:
+        file_path = os.path.join(SAVED_DIR, name)
+        if os.path.exists(file_path):
+            with open(file_path, "r", encoding="utf-8") as f:
+                code = f.read()
+            res = Response(code, mimetype="text/plain")
+            res.headers["Access-Control-Allow-Origin"] = "*"
+            res.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+            return res
+
+    return Response("-- Error: Script not found on server.", status=404, mimetype="text/plain")
 
 
 if __name__ == "__main__":
