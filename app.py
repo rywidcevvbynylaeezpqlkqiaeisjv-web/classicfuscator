@@ -1,18 +1,23 @@
 import math
+import os
 import random
 import re
 import string
 import uuid
 from flask import Flask, jsonify, render_template_string, request, Response
+from werkzeug.middleware.proxy_fix import ProxyFix
 
 app = Flask(__name__)
+
+# Enable ProxyFix so Flask recognizes HTTPS behind Render/Cloudflare proxies
+app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1, x_prefix=1)
 
 # In-memory storage for raw obfuscated scripts (key: filename, value: obfuscated_code)
 SCRIPT_CACHE = {}
 
 
 def random_id(prefix=""):
-    """Generates look-alike confusing variable names."""
+    """Generates ultra-confusing look-alike identifiers (I, l, 1, _)."""
     chars = ["I", "l", "1", "_"]
     body = "".join(random.choices(chars, k=random.randint(18, 28)))
     return f"{prefix}_{body}"
@@ -78,10 +83,11 @@ def obfuscate_lua(code: str) -> str:
     v_idx = random_id("idx")
     v_bxor = random_id("bx")
     v_rol = random_id("rl")
-    v_pred = random_id("pr")
+    v_test_fn = random_id("tfn")
+    v_test_err = random_id("terr")
 
-    # 6. Build High-Security Luau/Lua Stub
-    lua_stub = f"""--[[ Obfuscated with Classicfuscator v3 ]]--
+    # 6. High-Security Luau Stub with Smart Anti-Hook Capability Check
+    lua_stub = f"""--[[ Classicfuscator v3 - Smart Secured ]]--
 return (function(...)
     local {v_seed} = {k_seed}
     local {v_mult} = {k_mult}
@@ -91,6 +97,19 @@ return (function(...)
     local {v_chunks} = {chunks_lua}
 
     local {v_env} = (getgenv and getgenv()) or (getfenv and getfenv()) or _ENV or _G
+    local {v_loader} = {v_env}.loadstring or load
+
+    -- SMART ANTI-HOOK CHECK: Detects loadstring overrides without breaking legit loaders/wrappers
+    if type({v_loader}) ~= "function" then
+        error("[Classicfuscator] Missing loader capability in environment.", 0)
+    end
+
+    local {v_test_fn}, {v_test_err} = {v_loader}("return true", "@test")
+    if type({v_test_fn}) ~= "function" or {v_test_fn}() ~= true then
+        -- Dump/hooking attempt detected! Terminate execution silently.
+        return (function() end)()
+    end
+
     local {v_char} = string.char
     local {v_concat} = table.concat
 
@@ -113,10 +132,6 @@ return (function(...)
         return (l + r) % 256
     end
 
-    local function {v_pred}()
-        return math.sin(0) == 0 and math.abs(-1) == 1
-    end
-
     local {v_out} = {{}}
     local {v_state} = {v_seed}
     local {v_idx} = 0
@@ -124,25 +139,18 @@ return (function(...)
     for c_idx = 1, #{v_chunks} do
         local chunk = {v_chunks}[c_idx]
         for b_idx = 1, #chunk do
-            if {v_pred}() then
-                {v_idx} = {v_idx} + 1
-                {v_state} = ({v_state} * {v_mult} + {v_inc}) % 256
-                local raw = chunk[b_idx]
-                local pos_key = ({v_idx} + 13) % 256
-                
-                local step1 = {v_bxor}(raw, pos_key)
-                local step2 = {v_bxor}(step1, {v_mask})
-                local step3 = {v_bxor}(step2, {v_state})
-                local unrotated = {v_rol}(step3, {v_shift})
-                
-                {v_out}[#{v_out} + 1] = {v_char}(unrotated)
-            end
+            {v_idx} = {v_idx} + 1
+            {v_state} = ({v_state} * {v_mult} + {v_inc}) % 256
+            local raw = chunk[b_idx]
+            local pos_key = ({v_idx} + 13) % 256
+            
+            local step1 = {v_bxor}(raw, pos_key)
+            local step2 = {v_bxor}(step1, {v_mask})
+            local step3 = {v_bxor}(step2, {v_state})
+            local unrotated = {v_rol}(step3, {v_shift})
+            
+            {v_out}[#{v_out} + 1] = {v_char}(unrotated)
         end
-    end
-
-    local {v_loader} = {v_env}.loadstring or load
-    if type({v_loader}) ~= "function" then
-        error("[Classicfuscator] Unable to resolve valid loader function.", 0)
     end
 
     local {v_res}, {v_err} = {v_loader}({v_concat}({v_out}), "@Classicfuscator")
@@ -153,7 +161,7 @@ return (function(...)
         end
         return {v_res}(...)
     else
-        error("[Classicfuscator] Runtime Load Error: " .. tostring({v_err}), 0)
+        error("[Classicfuscator] Execution Error: " .. tostring({v_err}), 0)
     end
 end)(...)"""
 
@@ -174,7 +182,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Classicfuscator</title>
+    <title>Classicfuscator v3 - Smart Secured</title>
     <style>
         * { box-sizing: border-box; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
         body { background-color: #f0f7ff; color: #1e293b; margin: 0; padding: 40px 20px; display: flex; justify-content: center; align-items: center; min-height: 100vh; }
@@ -182,10 +190,6 @@ HTML_TEMPLATE = """<!DOCTYPE html>
         
         .header-bar { display: flex; justify-content: space-between; align-items: center; margin-bottom: 24px; }
         h1 { font-size: 26px; font-weight: 800; color: #0070f3; margin: 0; letter-spacing: -0.5px; }
-        
-        .asmr-toggle { display: flex; align-items: center; gap: 8px; background: #eef6ff; padding: 6px 12px; border-radius: 20px; border: 1px solid #0070f3; cursor: pointer; font-size: 13px; font-weight: 600; color: #0070f3; transition: all 0.2s ease; }
-        .asmr-toggle:hover { background: #0070f3; color: white; }
-        .asmr-toggle.muted { border-color: #cbd5e1; color: #64748b; background: #f1f5f9; }
 
         .form-group { margin-bottom: 18px; }
         .section-label { font-size: 14px; font-weight: 600; color: #475569; margin-bottom: 8px; display: block; }
@@ -209,9 +213,6 @@ HTML_TEMPLATE = """<!DOCTYPE html>
     <div class="card">
         <div class="header-bar">
             <h1>Classicfuscator</h1>
-            <button class="asmr-toggle" id="asmrBtn" onclick="toggleASMR()">
-                <span id="asmrIcon">🔊</span> ASMR: <span id="asmrStatus">ON</span>
-            </button>
         </div>
 
         <div class="form-group">
@@ -233,7 +234,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
                 <button class="btn btn-copy-loader" onclick="copyLoader()">Copy Roblox Loader</button>
             </div>
 
-            <span class="section-label">Full Obfuscated Source Code:</span>
+            <span class="section-label">Full Obfuscated Code:</span>
             <textarea id="output" readonly></textarea>
             <button class="btn btn-copy-code" onclick="copyOutput()">Copy Full Obfuscated Code</button>
         </div>
@@ -241,29 +242,13 @@ HTML_TEMPLATE = """<!DOCTYPE html>
 
     <script>
         let audioCtx = null;
-        let asmrEnabled = true;
 
         function initAudio() {
             if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
         }
 
-        function toggleASMR() {
-            asmrEnabled = !asmrEnabled;
-            const btn = document.getElementById('asmrBtn');
-            if (asmrEnabled) {
-                btn.classList.remove('muted');
-                document.getElementById('asmrStatus').innerText = "ON";
-                document.getElementById('asmrIcon').innerText = "🔊";
-                playBubblePop();
-            } else {
-                btn.classList.add('muted');
-                document.getElementById('asmrStatus').innerText = "OFF";
-                document.getElementById('asmrIcon').innerText = "🔇";
-            }
-        }
-
+        // ASMR Sound Effects - Always Active
         function playBubblePop() {
-            if (!asmrEnabled) return;
             initAudio();
             const osc = audioCtx.createOscillator();
             const gain = audioCtx.createGain();
@@ -279,7 +264,6 @@ HTML_TEMPLATE = """<!DOCTYPE html>
         }
 
         function playSoftTap() {
-            if (!asmrEnabled) return;
             initAudio();
             const osc = audioCtx.createOscillator();
             const gain = audioCtx.createGain();
@@ -295,7 +279,6 @@ HTML_TEMPLATE = """<!DOCTYPE html>
         }
 
         function playAmbientChime() {
-            if (!asmrEnabled) return;
             initAudio();
             const freqs = [523.25, 659.25, 783.99, 1046.50];
             freqs.forEach((freq, idx) => {
@@ -378,9 +361,13 @@ def process():
     
     SCRIPT_CACHE[clean_filename] = obfuscated_code
     
-    # Auto-detect real domain (works on localhost, Render, or any custom domain)
+    # Strictly enforce HTTPS protocol for Roblox game:HttpGet compatibility
     domain_url = request.host_url.rstrip("/")
-    loader_script = f'loadstring(game:HttpGet("{domain_url}/{clean_filename}"))()'
+    if domain_url.startswith("http://") and not ("127.0.0.1" in domain_url or "localhost" in domain_url):
+        domain_url = domain_url.replace("http://", "https://", 1)
+
+    # Universal Roblox game:HttpGet Loader with True parameter to bypass cache
+    loader_script = f'loadstring(game:HttpGet("{domain_url}/{clean_filename}", true))()'
 
     return jsonify({
         "result": obfuscated_code,
@@ -394,10 +381,13 @@ def serve_script(filename):
     code = SCRIPT_CACHE.get(filename)
     if not code:
         return Response("-- Error: Script not found or server restarted.", status=404, mimetype="text/plain")
-    return Response(code, mimetype="text/plain")
+    
+    res = Response(code, mimetype="text/plain")
+    res.headers["Access-Control-Allow-Origin"] = "*"
+    res.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+    return res
 
 
 if __name__ == "__main__":
-    import os
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port)
