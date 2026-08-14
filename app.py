@@ -12,7 +12,7 @@ app = Flask(__name__)
 # Enable ProxyFix so Flask recognizes HTTPS behind Render/Cloudflare proxies
 app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1, x_prefix=1)
 
-# Dual-storage setup (RAM + Disk)
+# Storage for obfuscated scripts (RAM + Server Disk)
 SCRIPT_CACHE = {}
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 SAVED_DIR = os.path.join(BASE_DIR, "saved_scripts")
@@ -83,7 +83,7 @@ def obfuscate_lua(code: str) -> str:
     v_test_err = random_id("terr")
 
     # 5. Zero-Warning Luau Stub
-    lua_stub = f"""--[[ Classicfuscator v3 - Zero Warning Edition ]]--
+    lua_stub = f"""--[[ Classicfuscator v3 ]]--
 return (function(...)
     local {v_seed} = {k_seed}
     local {v_mult} = {k_mult}
@@ -162,7 +162,7 @@ end)(...)"""
 
 
 def sanitize_filename(name: str) -> str:
-    """Properly preserves .lua extension without double-extension bugs."""
+    """Preserves .lua extension cleanly."""
     name = name.strip()
     if name.endswith(".lua"):
         base = name[:-4]
@@ -334,10 +334,10 @@ def process():
     clean_filename = sanitize_filename(raw_filename)
     obfuscated_code = obfuscate_lua(raw_code)
     
-    # Save to RAM Cache
+    # Save to RAM
     SCRIPT_CACHE[clean_filename] = obfuscated_code
     
-    # Save to Disk Storage
+    # Save to Disk
     file_path = os.path.join(SAVED_DIR, clean_filename)
     with open(file_path, "w", encoding="utf-8") as f:
         f.write(obfuscated_code)
@@ -357,14 +357,14 @@ def process():
 
 @app.route("/<path:filename>", methods=["GET"])
 def serve_script(filename):
-    """Smart Fallback Route to serve obfuscated scripts to Roblox."""
+    """Serves the obfuscated script payload to Roblox when requested."""
     possible_names = [
         filename,
         filename + ".lua" if not filename.endswith(".lua") else filename,
         filename.replace(".lua", "") + ".lua"
     ]
     
-    # Check RAM Cache first
+    # Check RAM Cache
     for name in possible_names:
         if name in SCRIPT_CACHE:
             res = Response(SCRIPT_CACHE[name], mimetype="text/plain")
@@ -372,7 +372,7 @@ def serve_script(filename):
             res.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
             return res
 
-    # Check Disk Storage second
+    # Check Disk Storage
     for name in possible_names:
         file_path = os.path.join(SAVED_DIR, name)
         if os.path.exists(file_path):
