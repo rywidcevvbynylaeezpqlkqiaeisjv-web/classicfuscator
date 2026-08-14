@@ -12,12 +12,12 @@ app = Flask(__name__)
 # Enable ProxyFix so Flask recognizes HTTPS behind Render/Cloudflare proxies
 app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1, x_prefix=1)
 
-# In-memory storage for raw obfuscated scripts (key: filename, value: obfuscated_code)
+# In-memory storage for raw obfuscated scripts
 SCRIPT_CACHE = {}
 
 
 def random_id(prefix=""):
-    """Generates ultra-confusing look-alike identifiers (I, l, 1, _)."""
+    """Generates look-alike confusing variable names."""
     chars = ["I", "l", "1", "_"]
     body = "".join(random.choices(chars, k=random.randint(18, 28)))
     return f"{prefix}_{body}"
@@ -32,21 +32,14 @@ def obfuscate_lua(code: str) -> str:
     if not code.strip():
         return "-- Error: Empty script provided."
 
-    # 1. Strip comments
-    code = re.sub(r"--\[\[[\s\S]*?\]\]", "", code)
-    code = re.sub(r"--[^\n]*", "", code)
-
-    if not code.strip():
-        return "-- Error: Script contained only comments."
-
-    # 2. Encryption Keys
+    # 1. Encryption Keys
     k_seed = random.randint(1000, 999999)
     k_mult = random.randint(3, 19) * 2 + 1
     k_inc = random.randint(1, 255)
     k_shift = random.randint(1, 7)
     k_mask = random.randint(32, 224)
 
-    # 3. Triple-Layer Bitwise Encryption
+    # 2. Triple-Layer Bitwise Encryption
     raw_bytes = list(code.encode("utf-8"))
     encrypted_bytes = []
     
@@ -54,10 +47,11 @@ def obfuscate_lua(code: str) -> str:
     for idx, byte in enumerate(raw_bytes):
         current_key = (current_key * k_mult + k_inc) % 256
         rotated = ror(byte, k_shift)
+        # Match 0-indexed pos_key
         enc = (rotated ^ current_key ^ k_mask ^ ((idx + 13) % 256)) % 256
         encrypted_bytes.append(enc)
 
-    # 4. Chunk Array into Dynamic Sub-tables
+    # 3. Chunk Array into Dynamic Sub-tables
     chunk_size = random.randint(15, 35)
     chunks = [
         encrypted_bytes[i : i + chunk_size]
@@ -65,7 +59,7 @@ def obfuscate_lua(code: str) -> str:
     ]
     chunks_lua = "{" + ",".join("{" + ",".join(map(str, c)) + "}" for c in chunks) + "}"
 
-    # 5. Identifier Generation
+    # 4. Identifier Generation
     v_seed = random_id("s")
     v_mult = random_id("m")
     v_inc = random_id("c")
@@ -86,8 +80,8 @@ def obfuscate_lua(code: str) -> str:
     v_test_fn = random_id("tfn")
     v_test_err = random_id("terr")
 
-    # 6. High-Security Luau Stub with Smart Anti-Hook Capability Check
-    lua_stub = f"""--[[ Classicfuscator v3 - Smart Secured ]]--
+    # 5. Corrected Luau Stub (Aligned 0-indexed byte offset)
+    lua_stub = f"""--[[ Classicfuscator v3 - Fixed Alignment ]]--
 return (function(...)
     local {v_seed} = {k_seed}
     local {v_mult} = {k_mult}
@@ -99,14 +93,13 @@ return (function(...)
     local {v_env} = (getgenv and getgenv()) or (getfenv and getfenv()) or _ENV or _G
     local {v_loader} = {v_env}.loadstring or load
 
-    -- SMART ANTI-HOOK CHECK: Detects loadstring overrides without breaking legit loaders/wrappers
+    -- Smart Anti-Hook Check
     if type({v_loader}) ~= "function" then
-        error("[Classicfuscator] Missing loader capability in environment.", 0)
+        error("[Classicfuscator] Missing loader capability.", 0)
     end
 
     local {v_test_fn}, {v_test_err} = {v_loader}("return true", "@test")
     if type({v_test_fn}) ~= "function" or {v_test_fn}() ~= true then
-        -- Dump/hooking attempt detected! Terminate execution silently.
         return (function() end)()
     end
 
@@ -139,10 +132,12 @@ return (function(...)
     for c_idx = 1, #{v_chunks} do
         local chunk = {v_chunks}[c_idx]
         for b_idx = 1, #chunk do
-            {v_idx} = {v_idx} + 1
             {v_state} = ({v_state} * {v_mult} + {v_inc}) % 256
             local raw = chunk[b_idx]
+            
+            -- FIX: Alignment offset (v_idx - 1) matches Python 0-indexed loop
             local pos_key = ({v_idx} + 13) % 256
+            {v_idx} = {v_idx} + 1
             
             local step1 = {v_bxor}(raw, pos_key)
             local step2 = {v_bxor}(step1, {v_mask})
@@ -182,29 +177,24 @@ HTML_TEMPLATE = """<!DOCTYPE html>
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Classicfuscator v3 - Smart Secured</title>
+    <title>Classicfuscator v3</title>
     <style>
         * { box-sizing: border-box; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
         body { background-color: #f0f7ff; color: #1e293b; margin: 0; padding: 40px 20px; display: flex; justify-content: center; align-items: center; min-height: 100vh; }
         .card { background: #ffffff; border-radius: 20px; box-shadow: 0 12px 40px rgba(0, 112, 243, 0.08); width: 100%; max-width: 620px; padding: 36px; border: 1px solid #e2e8f0; position: relative; }
-        
         .header-bar { display: flex; justify-content: space-between; align-items: center; margin-bottom: 24px; }
         h1 { font-size: 26px; font-weight: 800; color: #0070f3; margin: 0; letter-spacing: -0.5px; }
-
         .form-group { margin-bottom: 18px; }
         .section-label { font-size: 14px; font-weight: 600; color: #475569; margin-bottom: 8px; display: block; }
-        .text-input { width: 100%; padding: 12px 14px; border: 1px solid #cbd5e1; border-radius: 10px; font-size: 14px; outline: none; transition: border-color 0.2s ease; }
+        .text-input { width: 100%; padding: 12px 14px; border: 1px solid #cbd5e1; border-radius: 10px; font-size: 14px; outline: none; }
         .text-input:focus { border-color: #0070f3; box-shadow: 0 0 0 3px rgba(0, 112, 243, 0.15); }
-
-        textarea { width: 100%; height: 150px; border: 1px solid #cbd5e1; border-radius: 12px; padding: 14px; font-family: "Fira Code", monospace, sans-serif; font-size: 13px; resize: vertical; outline: none; background-color: #ffffff; color: #0f172a; transition: border-color 0.2s ease; }
+        textarea { width: 100%; height: 150px; border: 1px solid #cbd5e1; border-radius: 12px; padding: 14px; font-family: "Fira Code", monospace, sans-serif; font-size: 13px; resize: vertical; outline: none; background-color: #ffffff; color: #0f172a; }
         textarea:focus { border-color: #0070f3; box-shadow: 0 0 0 3px rgba(0, 112, 243, 0.15); }
-        
         .btn { width: 100%; padding: 14px; background-color: #0070f3; color: white; border: none; border-radius: 10px; font-size: 15px; font-weight: 700; cursor: pointer; margin-top: 14px; box-shadow: 0 4px 14px rgba(0, 112, 243, 0.25); transition: all 0.2s ease; }
         .btn:hover { background-color: #005bb5; transform: translateY(-1px); }
         .btn-copy-loader { background-color: #0070f3; }
         .btn-copy-code { background-color: #10b981; box-shadow: 0 4px 14px rgba(16, 185, 129, 0.25); }
         .btn-copy-code:hover { background-color: #059669; }
-
         .output-container { margin-top: 24px; display: none; }
         .loader-box { background: #f0f7ff; border: 1px solid #0070f3; border-radius: 12px; padding: 16px; margin-bottom: 16px; }
     </style>
@@ -247,7 +237,6 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
         }
 
-        // ASMR Sound Effects - Always Active
         function playBubblePop() {
             initAudio();
             const osc = audioCtx.createOscillator();
@@ -361,12 +350,11 @@ def process():
     
     SCRIPT_CACHE[clean_filename] = obfuscated_code
     
-    # Strictly enforce HTTPS protocol for Roblox game:HttpGet compatibility
+    # Enforce HTTPS protocol for Roblox game:HttpGet
     domain_url = request.host_url.rstrip("/")
     if domain_url.startswith("http://") and not ("127.0.0.1" in domain_url or "localhost" in domain_url):
         domain_url = domain_url.replace("http://", "https://", 1)
 
-    # Universal Roblox game:HttpGet Loader with True parameter to bypass cache
     loader_script = f'loadstring(game:HttpGet("{domain_url}/{clean_filename}", true))()'
 
     return jsonify({
