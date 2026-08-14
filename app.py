@@ -181,7 +181,21 @@ HTML_TEMPLATE = """<!DOCTYPE html>
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Classicfuscator v3</title>
+    <title>Classicfuscator - Free Online Roblox & Luau Script Obfuscator</title>
+
+    <!-- Google Site Verification Tag -->
+    <meta name="google-site-verification" content="NlXE_EkemBQKsLMYzO6UROuRTcYAlRiW7iaVdou1QBM" />
+
+    <!-- SEO Meta Tags -->
+    <meta name="description" content="Classicfuscator is a free online Lua and Luau script obfuscator. Secure your Roblox scripts with multi-layer encryption and auto-loader generation.">
+    <meta name="keywords" content="lua obfuscator, roblox obfuscator, luau obfuscator, script obfuscator, roblox script protection, classicfuscator">
+    <meta name="robots" content="index, follow">
+
+    <!-- Open Graph Meta Tags (Discord & Social Cards) -->
+    <meta property="og:title" content="Classicfuscator - Free Lua & Luau Script Obfuscator">
+    <meta property="og:description" content="Protect your Roblox scripts instantly. Generate secure 1-line remote loaders with anti-hooking technology.">
+    <meta property="og:type" content="website">
+
     <style>
         * { box-sizing: border-box; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
         body { background-color: #f0f7ff; color: #1e293b; margin: 0; padding: 40px 20px; display: flex; justify-content: center; align-items: center; min-height: 100vh; }
@@ -325,6 +339,30 @@ def index():
     return render_template_string(HTML_TEMPLATE)
 
 
+@app.route("/robots.txt", methods=["GET"])
+def robots():
+    """Tells search engine crawlers that the site is indexable."""
+    content = "User-agent: *\nAllow: /\nSitemap: " + request.host_url.rstrip("/") + "/sitemap.xml\n"
+    return Response(content, mimetype="text/plain")
+
+
+@app.route("/sitemap.xml", methods=["GET"])
+def sitemap():
+    """Generates XML Sitemap for Googlebot."""
+    host = request.host_url.rstrip("/")
+    if host.startswith("http://") and not ("127.0.0.1" in host or "localhost" in host):
+        host = host.replace("http://", "https://", 1)
+        
+    xml_content = f"""<?xml version="1.0" encoding="UTF-8"?>
+<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+   <url>
+      <loc>{host}/</loc>
+      <priority>1.00</priority>
+   </url>
+</urlset>"""
+    return Response(xml_content, mimetype="application/xml")
+
+
 @app.route("/obfuscate", methods=["POST"])
 def process():
     data = request.get_json(silent=True) or {}
@@ -334,10 +372,10 @@ def process():
     clean_filename = sanitize_filename(raw_filename)
     obfuscated_code = obfuscate_lua(raw_code)
     
-    # Save to RAM
+    # Save to RAM Cache
     SCRIPT_CACHE[clean_filename] = obfuscated_code
     
-    # Save to Disk
+    # Save to Disk Storage
     file_path = os.path.join(SAVED_DIR, clean_filename)
     with open(file_path, "w", encoding="utf-8") as f:
         f.write(obfuscated_code)
@@ -357,14 +395,13 @@ def process():
 
 @app.route("/<path:filename>", methods=["GET"])
 def serve_script(filename):
-    """Serves the obfuscated script payload to Roblox when requested."""
     possible_names = [
         filename,
         filename + ".lua" if not filename.endswith(".lua") else filename,
         filename.replace(".lua", "") + ".lua"
     ]
     
-    # Check RAM Cache
+    # Check RAM Cache first
     for name in possible_names:
         if name in SCRIPT_CACHE:
             res = Response(SCRIPT_CACHE[name], mimetype="text/plain")
@@ -372,7 +409,7 @@ def serve_script(filename):
             res.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
             return res
 
-    # Check Disk Storage
+    # Check Disk Storage second
     for name in possible_names:
         file_path = os.path.join(SAVED_DIR, name)
         if os.path.exists(file_path):
