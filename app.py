@@ -9,11 +9,14 @@ from flask import Flask, jsonify, render_template_string, request, Response
 from werkzeug.middleware.proxy_fix import ProxyFix
 
 # ==============================================================================
-# 1. APPLICATION & PERSISTENT STORAGE INITIALIZATION
+# 1. APPLICATION SETUP & PERSISTENT DATABASE
 # ==============================================================================
 
 app = Flask(__name__)
 app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1, x_prefix=1)
+
+# Render Custom Domain (Set your render URL here or leave blank to auto-detect)
+CUSTOM_DOMAIN = "https://classicfuscator.onrender.com"
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 SAVED_DIR = os.path.join(BASE_DIR, "saved_scripts")
@@ -35,13 +38,13 @@ def init_db():
 init_db()
 
 def random_id(prefix="v"):
-    chars = ["I", "l", "1", "_", "O", "0"]
-    body = "".join(random.choices(chars, k=random.randint(16, 24)))
+    chars = ["I", "l", "1", "_"]
+    body = "".join(random.choices(chars, k=random.randint(18, 26)))
     return f"{prefix}_{body}"
 
 
 # ==============================================================================
-# 2. LEXER & TOKENIZER
+# 2. TOKENIZER & LEXICAL PARSER
 # ==============================================================================
 
 TOKEN_SPEC = [
@@ -53,7 +56,7 @@ TOKEN_SPEC = [
     ("NUMBER_HEX", r"0[xX][0-9a-fA-F]+"),
     ("NUMBER_DEC", r"\b\d+\.?\d*(?:[eE][+-]?\d+)?\b"),
     ("OPERATOR", r"==|~=|<=|>=|\.\.|\+|\-|\*|\/|\%|\^|\#|\<|\>|\="),
-    ("SYMBOL", r"[\(\)\[\]\{\}\;\,\.]"),
+    ("SYMBOL", r"[\(\)\[\]\{\}\;\,\.:]"),
     ("IDENTIFIER", r"[a-zA-Z_][a-zA-Z0-9_]*"),
     ("WHITESPACE", r"\s+"),
 ]
@@ -70,32 +73,29 @@ def tokenize_lua(code: str):
 
 
 # ==============================================================================
-# 3. BYTECODE COMPILER & VIRTUAL INSTRUCTION SET (ISA)
+# 3. BYTECODE COMPILER & VIRTUAL INSTRUCTION ENGINE
 # ==============================================================================
 
 OPCODES = [
-    "OP_LOADK",       # R(A) := K(B)
-    "OP_LOADBOOL",    # R(A) := (B ~= 0)
-    "OP_LOADNIL",     # R(A) := nil
-    "OP_GETGLOBAL",   # R(A) := G[K(B)]
-    "OP_SETGLOBAL",   # G[K(B)] := R(A)
-    "OP_MOVE",        # R(A) := R(B)
-    "OP_CALL",        # R(A)(R(A+1), ..., R(A+B-1))
-    "OP_ADD",         # R(A) := R(B) + R(C)
-    "OP_SUB",         # R(A) := R(B) - R(C)
-    "OP_MUL",         # R(A) := R(B) * R(C)
-    "OP_DIV",         # R(A) := R(B) / R(C)
-    "OP_CONCAT",      # R(A) := R(B) .. R(C)
-    "OP_JMP",         # PC := PC + sBx
-    "OP_EQ",          # if (R(A) == R(B)) ~= C then PC++
-    "OP_LT",          # if (R(A) <  R(B)) ~= C then PC++
-    "OP_LE",          # if (R(A) <= R(B)) ~= C then PC++
-    "OP_RETURN",      # return R(A), ..., R(A+B-1)
+    "OP_LOADK",
+    "OP_LOADBOOL",
+    "OP_LOADNIL",
+    "OP_GETGLOBAL",
+    "OP_SETGLOBAL",
+    "OP_GETTABLE",
+    "OP_SETTABLE",
+    "OP_MOVE",
+    "OP_CALL",
+    "OP_ADD",
+    "OP_SUB",
+    "OP_MUL",
+    "OP_DIV",
+    "OP_CONCAT",
+    "OP_RETURN",
 ]
 
 class VMCompiler:
     def __init__(self):
-        # Dynamic Opcode Permutation per compilation
         shuffled = list(OPCODES)
         random.shuffle(shuffled)
         self.isa = {op: idx + 1 for idx, op in enumerate(shuffled)}
@@ -120,8 +120,7 @@ class VMCompiler:
         self.reg_top += 1
         return r
 
-    def parse_expression(self, tokens, start_idx):
-        """Parses simple expressions, values, literals, or binary ops."""
+    def parse_primary_expression(self, tokens, start_idx):
         idx = start_idx
         kind, val = tokens[idx]
         reg = self.alloc_reg()
@@ -162,8 +161,25 @@ class VMCompiler:
             self.emit("OP_LOADNIL", reg, 0, 0)
             idx += 1
 
-        # Check for binary operators (+, -, *, .., ==)
-        if idx < len(tokens) and tokens[idx][0] == "OPERATOR":
+        # Handle member access like game.Workspace or obj:Method
+        while idx < len(tokens) and tokens[idx][1] in (".", ":"):
+            sep = tokens[idx][1]
+            idx += 1
+            if idx < len(tokens) and tokens[idx][0] == "IDENTIFIER":
+                member_name = tokens[idx][1]
+                k_idx = self.get_const(member_name)
+                next_reg = self.alloc_reg()
+                self.emit("OP_GETTABLE", next_reg, reg, k_idx)
+                reg = next_reg
+                idx += 1
+
+        return reg, idx
+
+    def parse_expression(self, tokens, start_idx):
+        reg, idx = self.parse_primary_expression(tokens, start_idx)
+
+        # Handle binary operators
+        if idx < len(tokens) and tokens[idx][0] == "OPERATOR" and tokens[idx][1] != "=":
             op_symbol = tokens[idx][1]
             idx += 1
             right_reg, next_idx = self.parse_expression(tokens, idx)
@@ -186,7 +202,7 @@ class VMCompiler:
         while i < n:
             kind, val = tokens[i]
 
-            # Parse Variable Assignment: local x = expr OR x = expr
+            # local x = expr
             if kind == "IDENTIFIER" and val == "local" and (i + 1) < n and tokens[i + 1][0] == "IDENTIFIER":
                 var_name = tokens[i + 1][1]
                 i += 2
@@ -197,6 +213,7 @@ class VMCompiler:
                     i = next_i
                 continue
 
+            # Variable assignment: x = expr
             elif kind == "IDENTIFIER" and (i + 1) < n and tokens[i + 1][1] == "=":
                 var_name = val
                 i += 2
@@ -209,38 +226,31 @@ class VMCompiler:
                 i = next_i
                 continue
 
-            # Parse Function Call: identifier(...)
-            elif kind == "IDENTIFIER" and (i + 1) < n and tokens[i + 1][1] == "(":
-                func_name = val
-                fn_reg = self.alloc_reg()
-                
-                if func_name in self.locals_map:
-                    self.emit("OP_MOVE", fn_reg, self.locals_map[func_name], 0)
-                else:
-                    k_idx = self.get_const(func_name)
-                    self.emit("OP_GETGLOBAL", fn_reg, k_idx, 0)
+            # Function Call or Method Invocation
+            elif kind == "IDENTIFIER":
+                fn_reg, next_i = self.parse_primary_expression(tokens, i)
+                i = next_i
+                if i < n and tokens[i][1] == "(":
+                    i += 1 # skip '('
+                    arg_count = 0
+                    while i < n and tokens[i][1] != ")":
+                        arg_reg, next_arg_i = self.parse_expression(tokens, i)
+                        target_reg = fn_reg + 1 + arg_count
+                        self.emit("OP_MOVE", target_reg, arg_reg, 0)
+                        arg_count += 1
+                        i = next_arg_i
+                        if i < n and tokens[i][1] == ",":
+                            i += 1
 
-                i += 2 # Skip '('
-                arg_count = 0
-                while i < n and tokens[i][1] != ")":
-                    arg_reg, next_i = self.parse_expression(tokens, i)
-                    target_reg = fn_reg + 1 + arg_count
-                    self.emit("OP_MOVE", target_reg, arg_reg, 0)
-                    arg_count += 1
-                    i = next_i
-                    if i < n and tokens[i][1] == ",":
+                    if i < n and tokens[i][1] == ")":
                         i += 1
 
-                if i < n and tokens[i][1] == ")":
-                    i += 1
-
-                self.emit("OP_CALL", fn_reg, arg_count + 1, 1)
+                    self.emit("OP_CALL", fn_reg, arg_count + 1, 1)
                 continue
 
             elif val == ";":
                 i += 1
                 continue
-
             else:
                 i += 1
 
@@ -248,14 +258,12 @@ class VMCompiler:
 
 
 # ==============================================================================
-# 4. RUNTIME INTERPRETER GENERATION (NO LOADSTRING)
+# 4. RUNTIME LUA VM CODE GENERATOR
 # ==============================================================================
 
 def generate_lua_vm(compiler: VMCompiler, settings: dict) -> str:
     xor_key = random.randint(32, 220)
-    seed = random.randint(10000, 99999)
 
-    # 1. Encrypt Constant Pool
     enc_constants = []
     for c in compiler.constants:
         if isinstance(c, str):
@@ -268,9 +276,8 @@ def generate_lua_vm(compiler: VMCompiler, settings: dict) -> str:
 
     consts_lua = "{" + ",".join(enc_constants) + "}"
 
-    # 2. Encrypt & Flatten Instruction Stream
     enc_instructions = []
-    for idx, inst in enumerate(compiler.instructions):
+    for inst in compiler.instructions:
         op, a, b, c = inst
         enc_op = (op ^ xor_key) % 256
         enc_a = (a ^ (xor_key + 1)) % 256
@@ -280,7 +287,6 @@ def generate_lua_vm(compiler: VMCompiler, settings: dict) -> str:
 
     instructions_lua = "{" + ",".join(enc_instructions) + "}"
 
-    # Variable Identifiers
     v_stack = random_id("Stk")
     v_pc = random_id("Pc")
     v_code = random_id("Code")
@@ -294,25 +300,12 @@ def generate_lua_vm(compiler: VMCompiler, settings: dict) -> str:
     v_b = random_id("B")
     v_c = random_id("C")
 
-    # Anti-Tamper & Environment Safety Block
-    anti_hook_block = ""
-    if settings.get("antihook", True):
-        anti_hook_block = f"""
-    local ts = tostring
-    if string.find(ts(pcall), "hook") or string.find(ts(string.char), "hook") then
-        while true do end
-        return
-    end
-"""
-
-    watermark = settings.get("watermark", "").strip()
-    watermark_header = f"--[[ {watermark} ]]\n" if watermark else "--[[ Protected by Classicfuscator VM Architecture ]]--\n"
-
     isa = compiler.isa
+    watermark = settings.get("watermark", "").strip()
+    watermark_header = f"--[[ {watermark} ]]\n" if watermark else "--[[ Protected by Classicfuscator VM ]]--\n"
 
-    vm_template = f"""{watermark_header}return (function(...)
+    vm_lua = f"""{watermark_header}return (function(...)
     local {v_env} = (getgenv and getgenv()) or _ENV or _G
-{anti_hook_block}
     local function {v_bxor}(a, b)
         if bit32 and bit32.bxor then return bit32.bxor(a, b) end
         if bit and bit.bxor then return bit.bxor(a, b) end
@@ -329,7 +322,6 @@ def generate_lua_vm(compiler: VMCompiler, settings: dict) -> str:
     local raw_k = {consts_lua}
     local {v_code} = {instructions_lua}
 
-    -- Constant Pool Realization
     local {v_const} = {{}}
     for i = 1, #raw_k do
         local entry = raw_k[i]
@@ -348,7 +340,6 @@ def generate_lua_vm(compiler: VMCompiler, settings: dict) -> str:
     end
     raw_k = nil
 
-    -- Register Virtual Machine State
     local {v_stack} = {{}}
     local {v_pc} = 1
 
@@ -369,6 +360,12 @@ def generate_lua_vm(compiler: VMCompiler, settings: dict) -> str:
             {v_stack}[{v_a}] = {v_env}[{v_const}[{v_b}]]
         elseif {v_op} == {isa["OP_SETGLOBAL"]} then
             {v_env}[{v_const}[{v_b}]] = {v_stack}[{v_a}]
+        elseif {v_op} == {isa["OP_GETTABLE"]} then
+            local obj = {v_stack}[{v_b}]
+            local key = {v_const}[{v_c}]
+            if obj ~= nil then
+                {v_stack}[{v_a}] = obj[key]
+            end
         elseif {v_op} == {isa["OP_MOVE"]} then
             {v_stack}[{v_a}] = {v_stack}[{v_b}]
         elseif {v_op} == {isa["OP_ADD"]} then
@@ -389,7 +386,9 @@ def generate_lua_vm(compiler: VMCompiler, settings: dict) -> str:
                 args[arg_idx] = {v_stack}[k]
                 arg_idx = arg_idx + 1
             end
-            fn(unpack(args))
+            if type(fn) == "function" then
+                fn(unpack(args))
+            end
         elseif {v_op} == {isa["OP_RETURN"]} then
             return {v_stack}[{v_a}]
         end
@@ -397,7 +396,7 @@ def generate_lua_vm(compiler: VMCompiler, settings: dict) -> str:
         {v_pc} = {v_pc} + 1
     end
 end)(...)"""
-    return vm_template
+    return vm_lua
 
 
 def compile_pipeline(raw_code: str, settings: dict) -> str:
@@ -408,7 +407,7 @@ def compile_pipeline(raw_code: str, settings: dict) -> str:
 
 
 # ==============================================================================
-# 5. DASHBOARD UI & FLASK ROUTES
+# 5. UI DASHBOARD & APIS
 # ==============================================================================
 
 HTML_TEMPLATE = """<!DOCTYPE html>
@@ -416,169 +415,131 @@ HTML_TEMPLATE = """<!DOCTYPE html>
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Classicfuscator CVM Enterprise</title>
+    <title>Classicfuscator Enterprise</title>
     <style>
         * { box-sizing: border-box; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
-        body { background-color: #f1f5f9; color: #0f172a; margin: 0; padding: 40px 20px; display: flex; justify-content: center; align-items: center; min-height: 100vh; }
-        .card { background: #ffffff; border-radius: 16px; box-shadow: 0 10px 30px rgba(0, 0, 0, 0.05); width: 100%; max-width: 580px; padding: 32px; border: 1px solid #e2e8f0; }
-        h1 { font-size: 24px; font-weight: 700; margin: 0 0 16px 0; color: #0f172a; }
-        .tab-nav { display: flex; gap: 8px; background: #f8fafc; padding: 4px; border-radius: 10px; margin-bottom: 20px; border: 1px solid #e2e8f0; }
-        .tab-btn { flex: 1; padding: 10px; border: none; background: transparent; color: #64748b; font-size: 14px; font-weight: 600; border-radius: 8px; cursor: pointer; }
-        .tab-btn.active { background: #ffffff; color: #2563eb; box-shadow: 0 2px 6px rgba(0, 0, 0, 0.05); }
-        .tab-content { display: none; }
-        .tab-content.active { display: block; }
-        textarea { width: 100%; height: 180px; border: 1px solid #cbd5e1; border-radius: 10px; padding: 12px; font-family: monospace; font-size: 13px; outline: none; resize: vertical; }
-        textarea:focus { border-color: #2563eb; ring: 2px solid #93c5fd; }
-        .btn { width: 100%; padding: 12px; background-color: #2563eb; color: #ffffff; border: none; border-radius: 10px; font-size: 14px; font-weight: 600; cursor: pointer; margin-top: 14px; }
+        body { background-color: #f1f5f9; color: #0f172a; margin: 0; padding: 30px 16px; display: flex; justify-content: center; align-items: center; min-height: 100vh; }
+        .card { background: #ffffff; border-radius: 16px; box-shadow: 0 10px 30px rgba(0, 0, 0, 0.05); width: 100%; max-width: 600px; padding: 28px; border: 1px solid #e2e8f0; }
+        h1 { font-size: 22px; font-weight: 700; margin: 0 0 16px 0; }
+        textarea { width: 100%; height: 160px; border: 1px solid #cbd5e1; border-radius: 10px; padding: 12px; font-family: monospace; font-size: 13px; outline: none; }
+        textarea:focus { border-color: #2563eb; }
+        .btn { width: 100%; padding: 12px; background-color: #2563eb; color: #ffffff; border: none; border-radius: 10px; font-size: 14px; font-weight: 600; cursor: pointer; margin-top: 10px; }
         .btn:hover { background-color: #1d4ed8; }
-        .output-container { margin-top: 20px; display: none; }
-        .setting-group { margin-bottom: 14px; background: #f8fafc; padding: 12px 16px; border-radius: 10px; border: 1px solid #e2e8f0; display: flex; justify-content: space-between; align-items: center; }
-        .setting-title { font-size: 13.5px; font-weight: 600; }
-        .setting-desc { font-size: 12px; color: #64748b; margin-top: 2px; }
-        .switch { position: relative; display: inline-block; width: 40px; height: 22px; }
-        .switch input { opacity: 0; width: 0; height: 0; }
-        .slider { position: absolute; cursor: pointer; top: 0; left: 0; right: 0; bottom: 0; background-color: #cbd5e1; transition: .2s; border-radius: 20px; }
-        .slider:before { position: absolute; content: ""; height: 16px; width: 16px; left: 3px; bottom: 3px; background-color: white; transition: .2s; border-radius: 50%; }
-        input:checked + .slider { background-color: #2563eb; }
-        input:checked + .slider:before { transform: translateX(18px); }
+        .output-container { margin-top: 18px; display: none; }
+        .code-box { margin-bottom: 12px; }
+        .box-title { font-size: 12px; font-weight: 700; color: #475569; margin-bottom: 4px; display: block; }
     </style>
 </head>
 <body>
     <div class="card">
         <h1>Classicfuscator CVM</h1>
-        <div class="tab-nav">
-            <button class="tab-btn active" onclick="switchTab('obfTab', this)">Virtualizer</button>
-            <button class="tab-btn" onclick="switchTab('setTab', this)">Settings</button>
-        </div>
+        <textarea id="code" placeholder="print('Hello from Obfuscated VM!');"></textarea>
+        <button class="btn" id="btn" onclick="runObfuscation()">Obfuscate Script</button>
 
-        <div id="obfTab" class="tab-content active">
-            <textarea id="code" placeholder="print('Running via pure register VM architecture');"></textarea>
-            <button class="btn" id="btn" onclick="runObfuscation()">Compile to Bytecode VM</button>
-            <div class="output-container" id="outWrapper">
-                <textarea id="result" style="height: 90px;" readonly></textarea>
-                <button class="btn" style="background: #334155; margin-top: 8px;" onclick="copyCode()">Copy Loader</button>
+        <div class="output-container" id="outWrapper">
+            <div class="code-box">
+                <span class="box-title">Option 1: Direct Full Code (Paste directly into LocalScript):</span>
+                <textarea id="directCode" style="height: 110px;" readonly></textarea>
+                <button class="btn" style="background:#475569;" onclick="copy('directCode')">Copy Full Obfuscated Code</button>
             </div>
-        </div>
 
-        <div id="setTab" class="tab-content">
-            <div class="setting-group">
-                <div>
-                    <div class="setting-title">Anti-Tamper & Callstack Integrity</div>
-                    <div class="setting-desc">Detects metamethod hijacking and debug hooks.</div>
-                </div>
-                <label class="switch"><input type="checkbox" id="cfgAntiHook" checked><span class="slider"></span></label>
-            </div>
-            <div class="setting-group" style="flex-direction: column; align-items: flex-start; gap: 6px;">
-                <div class="setting-title">Watermark / Header Note</div>
-                <input type="text" id="cfgWatermark" style="width: 100%; padding: 8px; border: 1px solid #cbd5e1; border-radius: 6px;" placeholder="Protected by CVM Engine">
+            <div class="code-box">
+                <span class="box-title">Option 2: Roblox Executor Loader:</span>
+                <textarea id="execLoader" style="height: 48px;" readonly></textarea>
+                <button class="btn" style="background:#0284c7;" onclick="copy('execLoader')">Copy Executor Loader</button>
             </div>
         </div>
     </div>
 
     <script>
-        function switchTab(id, btn) {
-            document.querySelectorAll('.tab-content').forEach(el => el.classList.remove('active'));
-            document.querySelectorAll('.tab-btn').forEach(el => el.classList.remove('active'));
-            document.getElementById(id).classList.add('active');
-            btn.classList.add('active');
-        }
-
         async function runObfuscation() {
             const input = document.getElementById('code').value;
             const outWrapper = document.getElementById('outWrapper');
-            const result = document.getElementById('result');
             if (!input.trim()) return;
 
-            result.value = "-- Virtualizing bytecode instruction blocks...";
             outWrapper.style.display = "block";
-
+            document.getElementById('directCode').value = "-- Compiling VM bytecode...";
+            
             try {
                 const res = await fetch('/obfuscate', {
                     method: 'POST',
                     headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({
-                        code: input,
-                        settings: {
-                            antihook: document.getElementById('cfgAntiHook').checked,
-                            watermark: document.getElementById('cfgWatermark').value
-                        }
-                    })
+                    body: JSON.stringify({ code: input })
                 });
                 const data = await res.json();
-                result.value = data.loader || "-- Compilation Error.";
+                if (data.success) {
+                    document.getElementById('directCode').value = data.raw_code;
+                    document.getElementById('execLoader').value = data.loader;
+                } else {
+                    document.getElementById('directCode').value = "-- Error: " + data.error;
+                }
             } catch (err) {
-                result.value = "-- Server Connection Error.";
+                document.getElementById('directCode').value = "-- Server connection error.";
             }
         }
 
-        function copyCode() {
-            const result = document.getElementById('result');
-            result.select();
-            navigator.clipboard.writeText(result.value);
+        function copy(id) {
+            const el = document.getElementById(id);
+            el.select();
+            navigator.clipboard.writeText(el.value);
         }
     </script>
 </body>
 </html>
 """
 
-PROTECTED_HTML = """<!DOCTYPE html>
-<html>
-<head><title>Protected Endpoint</title><style>body{font-family:sans-serif;display:flex;align-items:center;justify-content:center;height:100vh;background:#f8fafc;color:#334155;}</style></head>
-<body><div><h3>Classicfuscator Secure Endpoint</h3><p>Direct browser navigation is blocked.</p></div></body>
-</html>"""
-
-
 # ==============================================================================
-# 6. ROUTING & RUNTIME ENDPOINTS
+# 6. ROUTE HANDLERS
 # ==============================================================================
 
 @app.route("/", methods=["GET"])
 def index():
     return render_template_string(HTML_TEMPLATE)
 
-
 @app.route("/obfuscate", methods=["POST"])
 def obfuscate_endpoint():
     data = request.get_json(silent=True) or {}
     raw_code = data.get("code", "")
-    settings = data.get("settings", {})
 
     if not raw_code.strip():
-        return jsonify({"success": False, "error": "Input code is empty."}), 400
+        return jsonify({"success": False, "error": "Code is empty"}), 400
 
     token = uuid.uuid4().hex
     try:
-        vm_protected_code = compile_pipeline(raw_code, settings)
+        vm_code = compile_pipeline(raw_code, {})
     except Exception as e:
-        return jsonify({"success": False, "error": f"Bytecode Compilation Error: {str(e)}"}), 500
+        return jsonify({"success": False, "error": str(e)}), 500
 
-    SCRIPT_CACHE[token] = vm_protected_code
-    
-    # Save to SQLite
+    SCRIPT_CACHE[token] = vm_code
+
     try:
         conn = sqlite3.connect(DB_PATH)
         c = conn.cursor()
         c.execute("INSERT OR REPLACE INTO scripts (token, code, created_at) VALUES (?, ?, ?)", 
-                  (token, vm_protected_code, time.time()))
+                  (token, vm_code, time.time()))
         conn.commit()
         conn.close()
     except Exception as e:
-        print("Database Save Warning:", e)
+        print("DB Save Error:", e)
 
-    domain_url = request.host_url.rstrip("/")
-    if request.headers.get("X-Forwarded-Proto") == "https":
-        domain_url = domain_url.replace("http://", "https://", 1)
+    if CUSTOM_DOMAIN:
+        domain_url = CUSTOM_DOMAIN.rstrip("/")
+    else:
+        domain_url = request.host_url.rstrip("/")
+        if request.headers.get("X-Forwarded-Proto") == "https":
+            domain_url = domain_url.replace("http://", "https://", 1)
 
     loader = f'loadstring(game:HttpGet("{domain_url}/raw/{token}"))()'
-    return jsonify({"success": True, "loader": loader, "token": token})
 
+    return jsonify({
+        "success": True,
+        "token": token,
+        "raw_code": vm_code,
+        "loader": loader
+    })
 
 @app.route("/raw/<token>", methods=["GET"])
 def serve_raw(token):
-    # Differentiate browser visits from HTTP clients / Roblox executors
-    if request.headers.get("Sec-Fetch-Dest") == "document" and request.headers.get("Sec-Ch-Ua"):
-        return render_template_string(PROTECTED_HTML)
-
     code = SCRIPT_CACHE.get(token)
     if not code:
         try:
@@ -594,13 +555,12 @@ def serve_raw(token):
             pass
 
     if code:
-        res = Response(code, mimetype="text/plain")
+        res = Response(code, mimetype="text/plain; charset=utf-8")
         res.headers["Access-Control-Allow-Origin"] = "*"
-        res.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+        res.headers["Cache-Control"] = "no-cache"
         return res
 
     return Response("-- [Classicfuscator] Script token not found.", status=404, mimetype="text/plain")
-
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
