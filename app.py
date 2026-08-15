@@ -1,9 +1,7 @@
 import math
 import os
 import random
-import re
 import sqlite3
-import string
 import time
 import uuid
 from flask import Flask, jsonify, render_template_string, request, Response
@@ -52,7 +50,7 @@ def obfuscate_lua(code: str, token: str) -> str:
     if not code.strip():
         return "-- Error: Empty script provided."
 
-    # 1. Convert raw code to UTF-8 byte stream (Preserves 100% original syntax)
+    # 1. Convert raw code to UTF-8 byte stream
     raw_bytes = list(code.encode("utf-8"))
 
     # 2. Encrypt byte stream with rolling positional keys
@@ -78,17 +76,15 @@ def obfuscate_lua(code: str, token: str) -> str:
         for i in range(0, len(encrypted_bytes), chunk_size)
     ]
 
-    # Create Shuffled State Machine Dispatcher
     chunk_states = list(range(100, 100 + len(chunks)))
     state_map = {}
     for idx, state_id in enumerate(chunk_states):
         next_state = chunk_states[idx + 1] if idx + 1 < len(chunk_states) else 0
         state_map[state_id] = (chunks[idx], next_state)
 
-    # Convert to Lua Table Representations
     chunks_lua = "{" + ",".join(f"[{s}]={'{' + ','.join(map(str, c[0])) + '}'}" for s, c in state_map.items()) + "}"
     trans_lua = "{" + ",".join(f"[{s}]={c[1]}" for s, c in state_map.items()) + "}"
-    start_state = chunk_states[0]
+    start_state = chunk_states[0] if chunk_states else 0
 
     # 4. Randomized Identifiers
     v_env = random_id("Env")
@@ -110,8 +106,8 @@ def obfuscate_lua(code: str, token: str) -> str:
     v_res = random_id("Res")
     v_err = random_id("Err")
 
-    # 5. Hardened Custom VM Stub (Guaranteed Execution Engine)
-    lua_stub = f"""--[[ Classicfuscator v9.3 Safe Enterprise VM ]]--
+    # 5. Hardened Custom VM Stub
+    lua_stub = f"""--[[ Classicfuscator VM ]]--
 return (function(...)
     local {v_env} = (getgenv and getgenv()) or _ENV or _G
     local {v_loader} = {v_env}.loadstring or load
@@ -124,7 +120,6 @@ return (function(...)
     local {v_char} = string.char
     local {v_concat} = table.concat
 
-    -- Safe Bitwise XOR Engine
     local function {v_bxor}(a, b)
         if bit32 and bit32.bxor then return bit32.bxor(a, b) end
         if bit and bit.bxor then return bit.bxor(a, b) end
@@ -144,7 +139,6 @@ return (function(...)
         return (l + r) % 256
     end
 
-    -- Cryptographic VM Seed Keys
     local {v_seed} = {k_seed}
     local {v_mult} = {k_mult}
     local {v_inc} = {k_inc}
@@ -157,7 +151,6 @@ return (function(...)
     local {v_out} = {{}}
     local {v_idx} = 0
 
-    -- Control-Flow Flattened Execution Loop
     while {v_state} ~= 0 do
         local chunk = {v_chunks}[{v_state}]
         if not chunk then break end
@@ -327,14 +320,14 @@ HTML_TEMPLATE = """<!DOCTYPE html>
 
         <div class="or-text">Or paste your Roblox Lua code here:</div>
 
-        <textarea id="input" placeholder=""></textarea>
+        <textarea id="input" placeholder="print('Hello World!')"></textarea>
 
         <button class="btn" onclick="obfuscate()">Start Obfuscation</button>
 
         <div class="output-container" id="outputWrapper">
             <div class="loader-box">
                 <span class="section-label">Roblox Loader Script:</span>
-                <textarea id="loaderOutput" style="height: 75px; background: #ffffff;" readonly></textarea>
+                <textarea id="loaderOutput" style="height: 90px; background: #ffffff;" readonly></textarea>
                 <button class="btn" style="background-color: #334155; color: #ffffff; box-shadow: none; margin-top: 10px;" onclick="copyLoader()">Copy Loader</button>
             </div>
         </div>
@@ -462,7 +455,7 @@ PROTECTED_HTML_TEMPLATE = """<!DOCTYPE html>
 <body>
     <div class="card">
         <h1>Protected By Classicfuscator</h1>
-        <p>Cannot be Shown Publicy</p>
+        <p>Cannot be shown publicly.</p>
     </div>
 </body>
 </html>
@@ -479,25 +472,19 @@ def process():
     data = request.get_json(silent=True) or {}
     raw_code = data.get("code", "")
     
-    # Generate dynamic 32-character Hex Token
     token = uuid.uuid4().hex
-    
-    # Compile with State Machine VM
     obfuscated_code = obfuscate_lua(raw_code, token)
     
-    # Store in RAM Cache
     SCRIPT_CACHE[token] = {
         "code": obfuscated_code,
         "created_at": time.time(),
         "active": True
     }
     
-    # Store in Disk File
     file_path = os.path.join(SAVED_DIR, f"{token}.lua")
     with open(file_path, "w", encoding="utf-8") as f:
         f.write(obfuscated_code)
 
-    # Store in Persistent SQLite Database
     try:
         conn = sqlite3.connect(DB_PATH)
         c = conn.cursor()
@@ -510,12 +497,18 @@ def process():
     except Exception as e:
         print("DB Save Error:", e)
     
-    # Enforce HTTPS URL
     domain_url = request.host_url.rstrip("/")
-    if domain_url.startswith("http://") and not ("127.0.0.1" in domain_url or "localhost" in domain_url):
+    if request.headers.get("X-Forwarded-Proto") == "https" or (domain_url.startswith("http://") and not ("127.0.0.1" in domain_url or "localhost" in domain_url)):
         domain_url = domain_url.replace("http://", "https://", 1)
 
-    loader_script = f'loadstring(game:HttpGet("{domain_url}/raw/{token}"))()'
+    # Hardened loader with error checking in Roblox
+    loader_script = (
+        f'local s, r = pcall(function() return game:HttpGet("{domain_url}/raw/{token}") end) '
+        f'if not s or not r then warn("[Classicfuscator] Failed to download payload: " .. tostring(r)) return end '
+        f'local f, err = loadstring(r) '
+        f'if not f then warn("[Classicfuscator] Load error: " .. tostring(err)) return end '
+        f'f()'
+    )
 
     return jsonify({
         "loader": loader_script,
@@ -523,43 +516,37 @@ def process():
     })
 
 
-@app.route("/verify/<token>", methods=["POST"])
-def verify_session(token):
-    """Server-side authorization endpoint."""
-    if token in SCRIPT_CACHE and SCRIPT_CACHE[token].get("active"):
-        return jsonify({"valid": True})
-    return jsonify({"valid": False}), 403
-
-
 @app.route("/raw/<token>", methods=["GET"])
 def serve_script(token):
     """
-    Serves raw payload to Roblox client, while serving a styled card to web browsers.
+    Serves raw Lua payload to Roblox / executor requests, and an HTML card to standard browser navigation.
     """
     user_agent = request.headers.get("User-Agent", "").lower()
+    fetch_dest = request.headers.get("Sec-Fetch-Dest", "").lower()
     fetch_mode = request.headers.get("Sec-Fetch-Mode", "").lower()
-    has_ch_ua = bool(request.headers.get("Sec-Ch-Ua"))
     accept_hdr = request.headers.get("Accept", "").lower()
 
-    # Precision Browser Navigation Check (Chrome, Edge, Safari, Firefox)
-    is_browser_navigation = (
-        fetch_mode == "navigate" or 
-        has_ch_ua or 
-        ("text/html" in accept_hdr and "roblox" not in user_agent)
+    # Distinguish actual browser address-bar visits from Roblox/HTTP executor requests
+    is_roblox_client = (
+        "roblox" in user_agent or 
+        "httpget" in user_agent or 
+        "executor" in user_agent or 
+        fetch_mode == "" and fetch_dest == "" and "*/*" in accept_hdr
     )
 
-    # If accessed by human browser navigation, render styled HTML card page
+    is_browser_navigation = (
+        not is_roblox_client and 
+        (fetch_dest == "document" or (fetch_mode == "navigate" and "text/html" in accept_hdr))
+    )
+
     if is_browser_navigation:
         return render_template_string(PROTECTED_HTML_TEMPLATE)
 
-    # Roblox Client / Executor Retrieval Path
     code = None
 
-    # Check RAM Cache
     if token in SCRIPT_CACHE:
         code = SCRIPT_CACHE[token]["code"]
 
-    # Check Persistent SQLite Database
     if not code:
         try:
             conn = sqlite3.connect(DB_PATH)
@@ -573,14 +560,12 @@ def serve_script(token):
         except Exception as e:
             print("DB Read Error:", e)
 
-    # Check Disk Storage
     if not code:
         file_path = os.path.join(SAVED_DIR, f"{token}.lua")
         if os.path.exists(file_path):
             with open(file_path, "r", encoding="utf-8") as f:
                 code = f.read()
 
-    # If code found, return HTTP 200 plain text payload
     if code:
         res = Response(code, mimetype="text/plain")
         res.headers["Access-Control-Allow-Origin"] = "*"
@@ -588,8 +573,7 @@ def serve_script(token):
         res.headers["Pragma"] = "no-cache"
         return res
 
-    # Graceful Fallback: Return HTTP 200 Lua Comment so Roblox doesn't crash with 404
-    return Response("-- Error: Invalid or Expired Token. Please generate a new loader from Classicfuscator.", status=200, mimetype="text/plain")
+    return Response("-- Error: Token not found or expired.", status=200, mimetype="text/plain")
 
 
 if __name__ == "__main__":
