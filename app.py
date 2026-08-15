@@ -48,40 +48,70 @@ def ror(val, count, bits=8):
     return ((val >> count) | (val << (bits - count))) & 0xFF
 
 
-def encode_string_literals(code: str) -> str:
+def virtualize_constants_and_tokens(code: str):
     """
-    Safely converts simple string literals into string.char(...) byte constructors
-    to prevent plaintext strings from appearing in memory dumps.
+    Tier-1 Obfuscation Engine: Lexically extracts all string literals into an 
+    encrypted Constant Pool Table (_K[]), completely eliminating plaintext string constants.
     """
-    def replacer(match):
-        s = match.group(1) or match.group(2)
-        if not s or len(s) > 100 or "\n" in s or "\\" in s:
-            return match.group(0)
-        bytes_str = ",".join(str(ord(c)) for c in s)
-        return f"string.char({bytes_str})"
+    constants = []
 
-    pattern = r'"([^"\\]*)"|\'([^\'\\]*)\''
+    def add_const(val):
+        if val in constants:
+            return constants.index(val)
+        constants.append(val)
+        return len(constants) - 1
+
+    def double_quote_sub(m):
+        s = m.group(1)
+        if not s or len(s) > 150 or "\n" in s:
+            return m.group(0)
+        c_idx = add_const(s)
+        return f"_K[{c_idx + 1}]"
+
+    def single_quote_sub(m):
+        s = m.group(1)
+        if not s or len(s) > 150 or "\n" in s:
+            return m.group(0)
+        c_idx = add_const(s)
+        return f"_K[{c_idx + 1}]"
+
+    dq_pattern = r'"([^"\\]*(?:\\.[^"\\]*)*)"'
+    sq_pattern = r"'([^'\\]*(?:\\.[^'\\]*)*)'"
+
     try:
-        return re.sub(pattern, replacer, code)
+        processed = re.sub(dq_pattern, double_quote_sub, code)
+        processed = re.sub(sq_pattern, single_quote_sub, processed)
+        return processed, constants
     except Exception:
-        return code
+        return code, []
 
 
 def obfuscate_lua(code: str, token: str) -> str:
     if not code.strip():
         return "-- Error: Empty script provided."
 
-    # 1. Pre-process string literals into string.char byte arrays
-    processed_code = encode_string_literals(code)
+    # 1. Constant Pool Virtualization Engine
+    processed_code, constants = virtualize_constants_and_tokens(code)
     raw_bytes = list(processed_code.encode("utf-8"))
 
-    # 2. Encrypt byte stream with rolling positional keys
+    # 2. Encrypt Constants Pool
     k_seed = random.randint(100000, 999999)
     k_mult = random.randint(5, 29) * 2 + 1
     k_inc = random.randint(1, 255)
     k_shift = random.randint(1, 7)
     k_mask = random.randint(16, 240)
 
+    enc_constants = []
+    for c_idx, const_str in enumerate(constants):
+        c_bytes = list(const_str.encode("utf-8"))
+        enc_c = []
+        c_key = (k_seed + c_idx * 17) % 256
+        for b_idx, b in enumerate(c_bytes):
+            c_key = (c_key * k_mult + k_inc + b_idx) % 256
+            enc_c.append((ror(b, k_shift) ^ c_key ^ k_mask ^ ((b_idx * 7 + 11) % 256)) % 256)
+        enc_constants.append(enc_c)
+
+    # 3. Encrypt Raw Code Byte Stream
     encrypted_bytes = []
     c_key = k_seed
     for idx, byte in enumerate(raw_bytes):
@@ -91,32 +121,34 @@ def obfuscate_lua(code: str, token: str) -> str:
         enc = (rotated ^ c_key ^ k_mask ^ pos_key) % 256
         encrypted_bytes.append(enc)
 
-    # 3. Dynamic Sub-Table Chunking
+    # 4. Control Flow Flattening & State Machine Dispatcher
     chunk_size = random.randint(14, 28)
     chunks = [
         encrypted_bytes[i : i + chunk_size]
         for i in range(0, len(encrypted_bytes), chunk_size)
     ]
 
-    # Create Shuffled State Machine Dispatcher
     chunk_states = list(range(100, 100 + len(chunks)))
     state_map = {}
     for idx, state_id in enumerate(chunk_states):
         next_state = chunk_states[idx + 1] if idx + 1 < len(chunk_states) else 0
         state_map[state_id] = (chunks[idx], next_state)
 
-    # Convert to Lua Table Representations
+    # Convert to Lua Tables
+    consts_lua = "{" + ",".join("{" + ",".join(map(str, c)) + "}" for c in enc_constants) + "}"
     chunks_lua = "{" + ",".join(f"[{s}]={'{' + ','.join(map(str, c[0])) + '}'}" for s, c in state_map.items()) + "}"
     trans_lua = "{" + ",".join(f"[{s}]={c[1]}" for s, c in state_map.items()) + "}"
     start_state = chunk_states[0]
 
-    # 4. Randomized Identifiers
+    # 5. Randomized Homoglyph Identifiers
     v_env = random_id("Env")
     v_loader = random_id("Ld")
     v_char = random_id("Chr")
     v_concat = random_id("Cat")
     v_bxor = random_id("Bx")
     v_rol = random_id("Rl")
+    v_kpool = random_id("K")
+    v_enc_k = random_id("EK")
     v_chunks = random_id("Data")
     v_trans = random_id("Tr")
     v_state = random_id("St")
@@ -132,8 +164,8 @@ def obfuscate_lua(code: str, token: str) -> str:
     v_err = random_id("Err")
     v_t0 = random_id("T0")
 
-    # 5. Hardened Custom VM Stub (Luau Safe Engine)
-    lua_stub = f"""--[[ Classicfuscator v8.7 Enterprise VM ]]--
+    # 6. Hardened Tier-1 Custom VM Stub
+    lua_stub = f"""--[[ Classicfuscator v9 Enterprise Commercial VM ]]--
 return (function(...)
     local {v_env} = (getgenv and getgenv()) or _ENV or _G
     local {v_loader} = {v_env}.loadstring or load
@@ -208,6 +240,26 @@ return (function(...)
     local {v_shift} = {k_shift}
     local {v_mask} = {k_mask}
 
+    -- Decrypt Constant Pool (_K Table Virtualization)
+    local {v_enc_k} = {consts_lua}
+    local _K = {{}}
+    for c_idx = 1, #{v_enc_k} do
+        local raw_c = {v_enc_k}[c_idx]
+        local c_out = {{}}
+        local c_key = ({v_seed} + (c_idx - 1) * 17) % 256
+        for b_idx = 1, #raw_c do
+            c_key = (c_key * {v_mult} + {v_inc} + (b_idx - 1)) % 256
+            local pos_key = ((b_idx - 1) * 7 + 11) % 256
+            local step1 = {v_bxor}(raw_c[b_idx], pos_key)
+            local step2 = {v_bxor}(step1, {v_mask})
+            local step3 = {v_bxor}(step2, c_key)
+            c_out[#c_out + 1] = {v_char}({v_rol}(step3, {v_shift}))
+        end
+        _K[c_idx] = {v_concat}(c_out)
+    end
+    {v_enc_k} = nil
+
+    -- Control-Flow Flattened Execution Loop
     local {v_chunks} = {chunks_lua}
     local {v_trans} = {trans_lua}
     local {v_state} = {start_state}
@@ -215,7 +267,6 @@ return (function(...)
     local {v_idx} = 0
     local {v_t0} = (os and os.clock and os.clock()) or 0
 
-    -- Control-Flow Flattened Execution Loop
     while {v_state} ~= 0 do
         if os and os.clock and (os.clock() - {v_t0} > 10.0) then
             return -- Abort if thread paused by debugger
@@ -450,7 +501,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             const loaderArea = document.getElementById('loaderOutput');
             
             outputWrapper.style.display = "block";
-            loaderArea.value = "-- Compiling State Machine VM...";
+            loaderArea.value = "-- Compiling Commercial Enterprise VM...";
 
             try {
                 const response = await fetch('/obfuscate', {
@@ -543,7 +594,7 @@ def process():
     # Generate dynamic 32-character Hex Token
     token = uuid.uuid4().hex
     
-    # Compile with State Machine VM + String Byte Encoding
+    # Compile with Constant Virtualization + State Machine VM
     obfuscated_code = obfuscate_lua(raw_code, token)
     
     # Store in RAM Cache
