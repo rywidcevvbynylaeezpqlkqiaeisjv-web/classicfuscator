@@ -114,8 +114,8 @@ def obfuscate_lua(code: str, token: str) -> str:
     v_err = random_id("Err")
     v_t0 = random_id("T0")
 
-    # 5. Hardened Custom VM Stub
-    lua_stub = f"""--[[ Classicfuscator v8.5 Enterprise VM ]]--
+    # 5. Hardened Custom VM Stub (Luau Safe Engine)
+    lua_stub = f"""--[[ Classicfuscator v8.6 Enterprise VM ]]--
 return (function(...)
     local {v_env} = (getgenv and getgenv()) or _ENV or _G
     local {v_loader} = {v_env}.loadstring or load
@@ -227,7 +227,6 @@ return (function(...)
     {v_out} = nil
     {v_chunks} = nil
     {v_trans} = nil
-    if collectgarbage then collectgarbage("step") end
 
     local {v_res}, {v_err} = {v_loader}(payload_str, "=[ClassicfuscatorVM]")
     payload_str = nil
