@@ -12,7 +12,7 @@ from werkzeug.middleware.proxy_fix import ProxyFix
 app = Flask(__name__)
 app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1, x_prefix=1)
 
-# Render Custom Domain (auto-detects if left blank)
+# Render Custom Domain
 CUSTOM_DOMAIN = "https://classicfuscator.onrender.com"
 
 # Persistent Storage
@@ -25,6 +25,7 @@ SCRIPT_CACHE = {}
 
 
 def init_db():
+    """Initializes SQLite database to persist tokens across server restarts."""
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
     c.execute(
@@ -39,17 +40,19 @@ init_db()
 
 
 def random_id(prefix=""):
+    """Generates homoglyph-style confusing variable names."""
     chars = ["I", "l", "1", "_"]
     body = "".join(random.choices(chars, k=random.randint(18, 26)))
     return f"{prefix}_{body}"
 
 
 def ror(val, count, bits=8):
+    """Rotate Right for 8-bit integer."""
     return ((val >> count) | (val << (bits - count))) & 0xFF
 
 
 # ==============================================================================
-# 1. FIXED AST-LEVEL LEXER & CONSTANT TRANSFORMER
+# 1. AST-LEVEL LEXER & CONSTANT TRANSFORMER
 # ==============================================================================
 
 TOKEN_SPEC = [
@@ -301,7 +304,7 @@ end)(...)"""
 
 
 # ==============================================================================
-# 3. WEB DASHBOARD & API
+# 3. ORIGINAL LIGHT THEME DASHBOARD & API
 # ==============================================================================
 
 HTML_TEMPLATE = """<!DOCTYPE html>
@@ -309,51 +312,207 @@ HTML_TEMPLATE = """<!DOCTYPE html>
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Classicfuscator Enterprise</title>
+    <title>Classicfuscator</title>
     <style>
-        * { box-sizing: border-box; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
-        body { background-color: #0b0f19; color: #f1f5f9; margin: 0; padding: 40px 20px; display: flex; justify-content: center; align-items: center; min-height: 100vh; }
-        .card { background: #111827; border-radius: 16px; box-shadow: 0 10px 40px rgba(0, 0, 0, 0.6); width: 100%; max-width: 560px; padding: 32px; border: 1px solid #1f2937; }
-        h1 { font-size: 24px; font-weight: 700; color: #38bdf8; margin: 0 0 6px 0; letter-spacing: -0.5px; }
-        .subtitle { font-size: 13px; color: #94a3b8; margin-bottom: 20px; }
-        textarea { width: 100%; height: 160px; border: 1px solid #374151; border-radius: 10px; padding: 14px; font-size: 13px; font-family: monospace; outline: none; background-color: #030712; color: #38bdf8; resize: vertical; }
-        textarea:focus { border-color: #0284c7; }
-        .btn { width: 100%; padding: 13px; background-color: #0284c7; color: #ffffff; border: none; border-radius: 10px; font-size: 15px; font-weight: 600; cursor: pointer; margin-top: 16px; }
-        .btn:hover { background-color: #0369a1; }
-        .output-container { margin-top: 20px; display: none; }
-        .loader-box { background: #030712; border: 1px solid #1e293b; border-radius: 10px; padding: 14px; }
-        .section-label { font-size: 12px; font-weight: 600; color: #94a3b8; text-transform: uppercase; margin-bottom: 8px; display: block; }
-        .loader-text { width: 100%; height: 48px; background: #111827; border: 1px solid #374151; border-radius: 8px; color: #38bdf8; font-family: monospace; font-size: 12.5px; padding: 12px; white-space: nowrap; overflow-x: auto; resize: none; }
-        .copy-btn { background-color: #1f2937; color: #e2e8f0; border: 1px solid #374151; margin-top: 8px; }
-        .copy-btn:hover { background-color: #374151; }
+        * { box-sizing: border-box; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }
+        body { 
+            background-color: #f2f4f8; 
+            color: #1e293b; 
+            margin: 0; 
+            padding: 40px 20px; 
+            display: flex; 
+            justify-content: center; 
+            align-items: center; 
+            min-height: 100vh; 
+        }
+        .card { 
+            background: #ffffff; 
+            border-radius: 20px; 
+            box-shadow: 0 4px 20px rgba(0, 0, 0, 0.03); 
+            width: 100%; 
+            max-width: 520px; 
+            padding: 36px 32px; 
+            border: 1px solid #eef0f4; 
+        }
+        h1 { 
+            font-size: 28px; 
+            font-weight: 700; 
+            color: #1a1a1a; 
+            margin: 0 0 24px 0; 
+            letter-spacing: -0.3px;
+        }
+        .file-upload-box {
+            border: 2px dashed #0070f3;
+            border-radius: 12px;
+            padding: 24px 20px;
+            background-color: #ffffff;
+            margin-bottom: 20px;
+            text-align: center;
+            cursor: pointer;
+            transition: all 0.2s ease;
+        }
+        .file-upload-box:hover, .file-upload-box.drag-over {
+            background-color: #f0f7ff;
+            border-color: #0052cc;
+        }
+        .file-upload-title {
+            font-size: 16px;
+            font-weight: 700;
+            color: #1a1a1a;
+            margin-bottom: 6px;
+            display: block;
+        }
+        .file-upload-subtext {
+            font-size: 13px;
+            color: #64748b;
+            margin: 0;
+        }
+        .or-text {
+            font-size: 15px;
+            font-weight: 400;
+            color: #1e293b;
+            margin-bottom: 12px;
+        }
+        textarea { 
+            width: 100%; 
+            height: 180px;
+            border: 1px solid #dcdfe6; 
+            border-radius: 12px; 
+            padding: 14px; 
+            font-size: 14px; 
+            font-family: monospace;
+            outline: none; 
+            background-color: #ffffff; 
+            color: #1e293b; 
+            transition: border-color 0.2s ease, box-shadow 0.2s ease;
+            resize: vertical;
+        }
+        textarea:focus { 
+            border-color: #0070f3; 
+            box-shadow: 0 0 0 3px rgba(0, 112, 243, 0.12);
+        }
+        .btn { 
+            width: 100%; 
+            padding: 14px; 
+            background-color: #0070f3; 
+            color: #ffffff; 
+            border: none; 
+            border-radius: 12px; 
+            font-size: 16px; 
+            font-weight: 600; 
+            cursor: pointer; 
+            margin-top: 20px; 
+            transition: background-color 0.2s ease;
+            box-shadow: 0 4px 12px rgba(0, 112, 243, 0.2);
+        }
+        .btn:hover { 
+            background-color: #005bb5; 
+        }
+        .output-container { margin-top: 24px; display: none; }
+        .loader-box { 
+            background: #f8fafc; 
+            border: 1px solid #e2e8f0; 
+            border-radius: 12px; 
+            padding: 16px; 
+        }
+        .section-label { 
+            font-size: 14px; 
+            font-weight: 600; 
+            color: #0070f3; 
+            margin-bottom: 8px; 
+            display: block; 
+        }
+        .loader-text {
+            width: 100%;
+            height: 48px;
+            background: #ffffff;
+            border: 1px solid #dcdfe6;
+            border-radius: 8px;
+            color: #1e293b;
+            font-family: monospace;
+            font-size: 13px;
+            padding: 12px;
+            white-space: nowrap;
+            overflow-x: auto;
+            resize: none;
+        }
     </style>
 </head>
 <body>
     <div class="card">
         <h1>Classicfuscator</h1>
-        <div class="subtitle">AST-Flattening • String Virtualization • Anti-Dump Protection</div>
-        <textarea id="input" placeholder="print('Hello from Protected Script!')"></textarea>
-        <button class="btn" id="submitBtn" onclick="obfuscate()">Obfuscate Script</button>
+
+        <div class="file-upload-box" id="dropZone" onclick="document.getElementById('luaFileInput').click()">
+            <span class="file-upload-title">Upload a Lua File:</span>
+            <p class="file-upload-subtext" id="dropSubtext">Click to choose or drag & drop file here (.lua, .txt)</p>
+            <input type="file" id="luaFileInput" accept=".lua,.luau,.txt" onchange="handleFileSelect(event)" style="display: none;">
+        </div>
+
+        <div class="or-text">Or paste your Roblox Lua code here:</div>
+
+        <textarea id="input" placeholder=""></textarea>
+
+        <button class="btn" onclick="obfuscate()">Start Obfuscation</button>
 
         <div class="output-container" id="outputWrapper">
             <div class="loader-box">
-                <span class="section-label">Roblox Loader (1-Liner)</span>
+                <span class="section-label">Roblox Loader Script:</span>
                 <textarea id="loaderOutput" class="loader-text" readonly></textarea>
-                <button class="btn copy-btn" id="copyBtn" onclick="copyLoader()">Copy Loader</button>
+                <button class="btn" id="copyBtn" style="background-color: #334155; color: #ffffff; box-shadow: none; margin-top: 10px;" onclick="copyLoader()">Copy Loader</button>
             </div>
         </div>
     </div>
 
     <script>
+        const dropZone = document.getElementById('dropZone');
+
+        ['dragenter', 'dragover'].forEach(eventName => {
+            dropZone.addEventListener(eventName, (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                dropZone.classList.add('drag-over');
+            }, false);
+        });
+
+        ['dragleave', 'drop'].forEach(eventName => {
+            dropZone.addEventListener(eventName, (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                dropZone.classList.remove('drag-over');
+            }, false);
+        });
+
+        dropZone.addEventListener('drop', (e) => {
+            const dt = e.dataTransfer;
+            const files = dt.files;
+            if (files.length > 0) {
+                readFileContent(files[0]);
+            }
+        });
+
+        function handleFileSelect(event) {
+            const files = event.target.files;
+            if (files.length > 0) {
+                readFileContent(files[0]);
+            }
+        }
+
+        function readFileContent(file) {
+            const reader = new FileReader();
+            reader.onload = function(e) {
+                document.getElementById('input').value = e.target.result;
+                document.getElementById('dropSubtext').innerText = "Loaded: " + file.name;
+            };
+            reader.readAsText(file);
+        }
+
         async function obfuscate() {
             const inputCode = document.getElementById('input').value;
             const outputWrapper = document.getElementById('outputWrapper');
             const loaderArea = document.getElementById('loaderOutput');
-            const submitBtn = document.getElementById('submitBtn');
             
             outputWrapper.style.display = "block";
-            loaderArea.value = "Compiling AST & VM Pipeline...";
-            submitBtn.innerText = "Processing...";
+            loaderArea.value = "-- Compiling State Machine VM...";
 
             try {
                 const response = await fetch('/obfuscate', {
@@ -361,12 +520,11 @@ HTML_TEMPLATE = """<!DOCTYPE html>
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ code: inputCode })
                 });
+
                 const data = await response.json();
-                loaderArea.value = data.loader || "-- Generation failed.";
+                loaderArea.value = data.loader || "-- Error generating loader.";
             } catch (err) {
-                loaderArea.value = "-- Error connecting to server.";
-            } finally {
-                submitBtn.innerText = "Obfuscate Script";
+                loaderArea.value = "-- Generation failed: " + err;
             }
         }
 
@@ -387,18 +545,49 @@ PROTECTED_HTML_TEMPLATE = """<!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <title>Protected Script</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Protected By Classicfuscator</title>
     <style>
-        body { background-color: #0b0f19; color: #f1f5f9; font-family: sans-serif; display: flex; justify-content: center; align-items: center; min-height: 100vh; margin: 0; }
-        .card { background: #111827; padding: 40px; border-radius: 16px; text-align: center; border: 1px solid #374151; }
-        h1 { color: #38bdf8; font-size: 20px; margin-bottom: 8px; }
-        p { color: #94a3b8; font-size: 14px; margin: 0; }
+        * { box-sizing: border-box; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }
+        body { 
+            background-color: #f2f4f8; 
+            color: #1e293b; 
+            margin: 0; 
+            padding: 20px; 
+            display: flex; 
+            justify-content: center; 
+            align-items: center; 
+            min-height: 100vh; 
+        }
+        .card { 
+            background: #ffffff; 
+            border-radius: 20px; 
+            box-shadow: 0 4px 20px rgba(0, 0, 0, 0.04); 
+            width: 100%; 
+            max-width: 440px; 
+            padding: 40px 28px; 
+            border: 1px solid #eef0f4; 
+            text-align: center;
+        }
+        h1 { 
+            font-size: 24px; 
+            font-weight: 700; 
+            color: #1a1a1a; 
+            margin: 0 0 10px 0; 
+            letter-spacing: -0.3px;
+        }
+        p { 
+            font-size: 15px; 
+            color: #64748b; 
+            margin: 0; 
+            font-weight: 500;
+        }
     </style>
 </head>
 <body>
     <div class="card">
-        <h1>Protected Script</h1>
-        <p>This payload is protected and can only be executed via Roblox.</p>
+        <h1>Protected By Classicfuscator</h1>
+        <p>Cannot be shown publicly.</p>
     </div>
 </body>
 </html>
@@ -447,7 +636,7 @@ def process():
         if request.headers.get("X-Forwarded-Proto") == "https" or (domain_url.startswith("http://") and not ("127.0.0.1" in domain_url or "localhost" in domain_url)):
             domain_url = domain_url.replace("http://", "https://", 1)
 
-    # 1-Liner Output
+    # Clean 1-Liner Output
     loader_script = f'loadstring(game:HttpGet("{domain_url}/raw/{token}"))()'
 
     return jsonify({
