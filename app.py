@@ -12,6 +12,7 @@ from werkzeug.middleware.proxy_fix import ProxyFix
 app = Flask(__name__)
 app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1, x_prefix=1)
 
+# Persistent Database & Directory Storage
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 SAVED_DIR = os.path.join(BASE_DIR, "saved_scripts")
 DB_PATH = os.path.join(BASE_DIR, "database.db")
@@ -21,6 +22,7 @@ SCRIPT_CACHE = {}
 
 
 def init_db():
+    """Initializes persistent SQLite database for tokens across server restarts."""
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
     c.execute(
@@ -35,22 +37,21 @@ init_db()
 
 
 def random_id(prefix=""):
+    """Generates homoglyph-style confusing variable names."""
     chars = ["I", "l", "1", "_"]
-    body = "".join(random.choices(chars, k=random.randint(16, 24)))
+    body = "".join(random.choices(chars, k=random.randint(18, 26)))
     return f"{prefix}_{body}"
 
 
+def ror(val, count, bits=8):
+    """Rotate Right for 8-bit integer."""
+    return ((val >> count) | (val << (bits - count))) & 0xFF
+
+
 # ==============================================================================
-# 1. AST-LEVEL LEXER & TOKEN TRANSFORMER
+# 1. AST-LEVEL LEXER & CONSTANT TRANSFORMER
 # ==============================================================================
 
-LUA_KEYWORDS = {
-    "and", "break", "do", "else", "elseif", "end", "false", "for",
-    "function", "if", "in", "local", "nil", "not", "or", "repeat",
-    "return", "then", "true", "until", "while"
-}
-
-# Regex Tokenizer for Lua
 TOKEN_SPEC = [
     ("COMMENT_LONG", r"--\[(=*)\[[\s\S]*?\]\1\]"),
     ("COMMENT_SHORT", r"--[^\n]*"),
@@ -67,7 +68,7 @@ TOKEN_REGEX = re.compile("|".join(f"(?P<{name}>{pattern})" for name, pattern in 
 
 
 def transform_number(num_str: str) -> str:
-    """Mutates numeric constants into randomized arithmetic/bitwise expressions."""
+    """Mutates numeric constants into algebraic and bitwise expressions."""
     try:
         if num_str.lower().startswith("0x"):
             val = int(num_str, 16)
@@ -81,16 +82,13 @@ def transform_number(num_str: str) -> str:
 
         mode = random.randint(1, 3)
         if mode == 1:
-            # Addition / Subtraction splitting
-            offset = random.randint(10, 500)
+            offset = random.randint(100, 999)
             return f"(({val + offset}) - {offset})"
         elif mode == 2:
-            # Multiplication / Subtraction
             mult = random.randint(2, 6)
             base = val * mult
             return f"(({base} / {mult}))"
         else:
-            # XOR formula
             xor_key = random.randint(1, 255)
             xor_res = val ^ xor_key
             return f"((bit32 and bit32.bxor({xor_res}, {xor_key})) or ({val}))"
@@ -100,16 +98,13 @@ def transform_number(num_str: str) -> str:
 
 def transform_string(str_val: str, dec_func_name: str) -> str:
     """Encrypts string literals and replaces them with dynamic decryptor calls."""
-    # Strip enclosing quotes
     if (str_val.startswith('"') and str_val.endswith('"')) or (str_val.startswith("'") and str_val.endswith("'")):
         inner = str_val[1:-1]
         try:
-            # Process escape sequences
             inner = bytes(inner, "utf-8").decode("unicode_escape")
         except Exception:
             pass
     elif str_val.startswith("["):
-        # Long brackets [[ ... ]]
         inner = re.sub(r"^\[=*\[|\]=*\]$", "", str_val)
     else:
         inner = str_val
@@ -122,7 +117,7 @@ def transform_string(str_val: str, dec_func_name: str) -> str:
 
 
 def ast_obfuscate(lua_code: str, dec_func_name: str) -> str:
-    """Pre-processes raw Lua, encrypting all strings, mutating numbers, and stripping comments."""
+    """Pre-processes code to encrypt all strings and mutate numbers before VM compilation."""
     output_tokens = []
     
     for match in TOKEN_REGEX.finditer(lua_code):
@@ -131,7 +126,6 @@ def ast_obfuscate(lua_code: str, dec_func_name: str) -> str:
 
         if kind in ("COMMENT_LONG", "COMMENT_SHORT"):
             output_tokens.append(" ")
-            continue
         elif kind in ("STRING_LONG", "STRING_SQ", "STRING_DQ"):
             output_tokens.append(transform_string(val, dec_func_name))
         elif kind in ("NUMBER_HEX", "NUMBER_DEC"):
@@ -148,21 +142,17 @@ def ast_obfuscate(lua_code: str, dec_func_name: str) -> str:
 # 2. RUNTIME VM & HARDENED PAYLOAD COMPILER
 # ==============================================================================
 
-def ror(val, count, bits=8):
-    return ((val >> count) | (val << (bits - count))) & 0xFF
-
-
 def obfuscate_lua(code: str, token: str) -> str:
     if not code.strip():
         return "print('[Classicfuscator] Empty script executed.')"
 
     v_dec = random_id("Dec")
     
-    # Stage 1: AST Token Transformation & String Virtualization
-    ast_transformed_code = ast_obfuscate(code, v_dec)
+    # Stage 1: AST Tokenization & String Virtualization
+    ast_transformed = ast_obfuscate(code, v_dec)
 
-    # Stage 2: Binary Bytecode Stream Encryption
-    raw_bytes = list(ast_transformed_code.encode("utf-8"))
+    # Stage 2: Binary Rolling Key State Machine
+    raw_bytes = list(ast_transformed.encode("utf-8"))
     k_seed = random.randint(100000, 999999)
     k_mult = random.randint(5, 29) * 2 + 1
     k_inc = random.randint(1, 255)
@@ -178,7 +168,7 @@ def obfuscate_lua(code: str, token: str) -> str:
         enc = (rotated ^ c_key ^ k_mask ^ pos_key) % 256
         encrypted_bytes.append(enc)
 
-    chunk_size = random.randint(14, 28)
+    chunk_size = random.randint(16, 32)
     chunks = [
         encrypted_bytes[i : i + chunk_size]
         for i in range(0, len(encrypted_bytes), chunk_size)
@@ -194,7 +184,7 @@ def obfuscate_lua(code: str, token: str) -> str:
     trans_lua = "{" + ",".join(f"[{s}]={c[1]}" for s, c in state_map.items()) + "}"
     start_state = chunk_states[0] if chunk_states else 0
 
-    # Stage 3: Randomized VM Variables & Identifiers
+    # Stage 3: Randomized VM Variables
     v_env = random_id("Env")
     v_loader = random_id("Ld")
     v_char = random_id("Chr")
@@ -213,14 +203,14 @@ def obfuscate_lua(code: str, token: str) -> str:
     v_mask = random_id("Mk")
     v_res = random_id("Res")
     v_err = random_id("Err")
-    v_anti = random_id("Anti")
     v_genv = random_id("Genv")
+    v_anti = random_id("Anti")
 
-    lua_stub = f"""--[[ Classicfuscator v10.0 Enterprise Hybrid VM ]]--
+    lua_stub = f"""--[[ Protected by Classicfuscator Enterprise ]]--
 return (function(...)
     local {v_genv} = (getgenv and getgenv()) or _ENV or _G
 
-    -- Anti-Hook & Integrity Sentinel
+    -- Anti-Hook & Callstack Sentinel
     local function {v_anti}()
         if debug and (debug.info or debug.getinfo) then
             local get_i = debug.info or debug.getinfo
@@ -237,14 +227,12 @@ return (function(...)
 
     local {v_loader} = {v_genv}.loadstring or loadstring or load
     if type({v_loader}) ~= "function" then
-        warn("[Classicfuscator] Execution environment unsupported.")
         return
     end
 
     local {v_char} = string.char
     local {v_concat} = table.concat
 
-    -- Safe Hardware/Software Bitwise XOR
     local function {v_bxor}(a, b)
         if bit32 and bit32.bxor then return bit32.bxor(a, b) end
         if bit and bit.bxor then return bit.bxor(a, b) end
@@ -264,7 +252,7 @@ return (function(...)
         return (l + r) % 256
     end
 
-    -- Embedded AST String Decryptor
+    -- Embedded String Decryptor
     {v_genv}.{v_dec} = function(bytes, k)
         local t = {{}}
         for i = 1, #bytes do
@@ -273,7 +261,6 @@ return (function(...)
         return {v_concat}(t)
     end
 
-    -- VM Key States
     local {v_seed} = {k_seed}
     local {v_mult} = {k_mult}
     local {v_inc} = {k_inc}
@@ -286,7 +273,6 @@ return (function(...)
     local {v_out} = {{}}
     local {v_idx} = 0
 
-    -- State-Machine Dispatch Loop
     while {v_state} ~= 0 do
         local chunk = {v_chunks}[{v_state}]
         if not chunk then break end
@@ -318,8 +304,6 @@ return (function(...)
 
     if type({v_res}) == "function" then
         return {v_res}(...)
-    else
-        warn("[Classicfuscator] Runtime error: " .. tostring({v_err}))
     end
 end)(...)"""
 
@@ -327,7 +311,7 @@ end)(...)"""
 
 
 # ==============================================================================
-# 3. WEB INTERFACE & FLASK API
+# 3. WEB DASHBOARD & API
 # ==============================================================================
 
 HTML_TEMPLATE = """<!DOCTYPE html>
@@ -335,33 +319,123 @@ HTML_TEMPLATE = """<!DOCTYPE html>
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Classicfuscator v10.0 Enterprise</title>
+    <title>Classicfuscator Enterprise</title>
     <style>
-        * { box-sizing: border-box; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }
-        body { background-color: #0f172a; color: #f8fafc; margin: 0; padding: 40px 20px; display: flex; justify-content: center; align-items: center; min-height: 100vh; }
-        .card { background: #1e293b; border-radius: 20px; box-shadow: 0 10px 30px rgba(0, 0, 0, 0.4); width: 100%; max-width: 580px; padding: 36px 32px; border: 1px solid #334155; }
-        h1 { font-size: 26px; font-weight: 700; color: #38bdf8; margin: 0 0 8px 0; }
-        .subtitle { font-size: 13px; color: #94a3b8; margin-bottom: 24px; }
-        textarea { width: 100%; height: 180px; border: 1px solid #475569; border-radius: 12px; padding: 14px; font-size: 14px; font-family: monospace; outline: none; background-color: #0f172a; color: #38bdf8; resize: vertical; }
-        .btn { width: 100%; padding: 14px; background-color: #0284c7; color: #ffffff; border: none; border-radius: 12px; font-size: 15px; font-weight: 600; cursor: pointer; margin-top: 18px; transition: background-color 0.2s; }
+        * { box-sizing: border-box; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+        body { 
+            background-color: #0b0f19; 
+            color: #f1f5f9; 
+            margin: 0; 
+            padding: 40px 20px; 
+            display: flex; 
+            justify-content: center; 
+            align-items: center; 
+            min-height: 100vh; 
+        }
+        .card { 
+            background: #111827; 
+            border-radius: 16px; 
+            box-shadow: 0 10px 40px rgba(0, 0, 0, 0.6); 
+            width: 100%; 
+            max-width: 560px; 
+            padding: 32px; 
+            border: 1px solid #1f2937; 
+        }
+        h1 { 
+            font-size: 24px; 
+            font-weight: 700; 
+            color: #38bdf8; 
+            margin: 0 0 6px 0; 
+            letter-spacing: -0.5px;
+        }
+        .subtitle { 
+            font-size: 13px; 
+            color: #94a3b8; 
+            margin-bottom: 20px; 
+        }
+        textarea { 
+            width: 100%; 
+            height: 160px; 
+            border: 1px solid #374151; 
+            border-radius: 10px; 
+            padding: 14px; 
+            font-size: 13px; 
+            font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; 
+            outline: none; 
+            background-color: #030712; 
+            color: #38bdf8; 
+            resize: vertical; 
+            transition: border-color 0.2s;
+        }
+        textarea:focus { border-color: #0284c7; }
+        .btn { 
+            width: 100%; 
+            padding: 13px; 
+            background-color: #0284c7; 
+            color: #ffffff; 
+            border: none; 
+            border-radius: 10px; 
+            font-size: 15px; 
+            font-weight: 600; 
+            cursor: pointer; 
+            margin-top: 16px; 
+            transition: all 0.2s ease; 
+        }
         .btn:hover { background-color: #0369a1; }
-        .output-container { margin-top: 24px; display: none; }
-        .loader-box { background: #0f172a; border: 1px solid #334155; border-radius: 12px; padding: 16px; }
-        .section-label { font-size: 14px; font-weight: 600; color: #38bdf8; margin-bottom: 8px; display: block; }
+        .output-container { margin-top: 20px; display: none; }
+        .loader-box { 
+            background: #030712; 
+            border: 1px solid #1e293b; 
+            border-radius: 10px; 
+            padding: 14px; 
+        }
+        .section-label { 
+            font-size: 12px; 
+            font-weight: 600; 
+            color: #94a3b8; 
+            text-transform: uppercase; 
+            letter-spacing: 0.5px; 
+            margin-bottom: 8px; 
+            display: block; 
+        }
+        .loader-text {
+            width: 100%;
+            height: 48px;
+            background: #111827;
+            border: 1px solid #374151;
+            border-radius: 8px;
+            color: #38bdf8;
+            font-family: ui-monospace, SFMono-Regular, monospace;
+            font-size: 12.5px;
+            padding: 12px;
+            white-space: nowrap;
+            overflow-x: auto;
+            resize: none;
+        }
+        .copy-btn {
+            background-color: #1f2937;
+            color: #e2e8f0;
+            border: 1px solid #374151;
+            margin-top: 8px;
+        }
+        .copy-btn:hover {
+            background-color: #374151;
+        }
     </style>
 </head>
 <body>
     <div class="card">
-        <h1>Classicfuscator v10.0</h1>
+        <h1>Classicfuscator</h1>
         <div class="subtitle">AST-Flattening • String Virtualization • Anti-Dump Protection</div>
+
         <textarea id="input" placeholder="print('Hello from Protected Script!')"></textarea>
-        <button class="btn" onclick="obfuscate()">Obfuscate & Generate Loader</button>
+        <button class="btn" id="submitBtn" onclick="obfuscate()">Obfuscate Script</button>
 
         <div class="output-container" id="outputWrapper">
             <div class="loader-box">
-                <span class="section-label">Roblox Loader Script:</span>
-                <textarea id="loaderOutput" style="height: 110px;" readonly></textarea>
-                <button class="btn" style="background-color: #334155; margin-top: 10px;" onclick="copyLoader()">Copy Loader</button>
+                <span class="section-label">Roblox Loader (1-Liner)</span>
+                <textarea id="loaderOutput" class="loader-text" readonly></textarea>
+                <button class="btn copy-btn" id="copyBtn" onclick="copyLoader()">Copy Loader</button>
             </div>
         </div>
     </div>
@@ -371,9 +445,11 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             const inputCode = document.getElementById('input').value;
             const outputWrapper = document.getElementById('outputWrapper');
             const loaderArea = document.getElementById('loaderOutput');
+            const submitBtn = document.getElementById('submitBtn');
             
             outputWrapper.style.display = "block";
-            loaderArea.value = "-- Compiling AST & VM Pipeline...";
+            loaderArea.value = "Compiling AST & VM Pipeline...";
+            submitBtn.innerText = "Processing...";
 
             try {
                 const response = await fetch('/obfuscate', {
@@ -382,17 +458,21 @@ HTML_TEMPLATE = """<!DOCTYPE html>
                     body: JSON.stringify({ code: inputCode })
                 });
                 const data = await response.json();
-                loaderArea.value = data.loader || "-- Error generating loader.";
+                loaderArea.value = data.loader || "-- Generation failed.";
             } catch (err) {
-                loaderArea.value = "-- Generation failed: " + err;
+                loaderArea.value = "-- Error connecting to server.";
+            } finally {
+                submitBtn.innerText = "Obfuscate Script";
             }
         }
 
         function copyLoader() {
             const loaderArea = document.getElementById('loaderOutput');
+            const copyBtn = document.getElementById('copyBtn');
             loaderArea.select();
             navigator.clipboard.writeText(loaderArea.value);
-            alert('Loader copied to clipboard!');
+            copyBtn.innerText = "Copied to Clipboard!";
+            setTimeout(() => { copyBtn.innerText = "Copy Loader"; }, 2000);
         }
     </script>
 </body>
@@ -403,12 +483,12 @@ PROTECTED_HTML_TEMPLATE = """<!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <title>Protected By Classicfuscator</title>
+    <title>Protected Script</title>
     <style>
-        body { background-color: #0f172a; color: #f8fafc; font-family: sans-serif; display: flex; justify-content: center; align-items: center; min-height: 100vh; margin: 0; }
-        .card { background: #1e293b; padding: 40px; border-radius: 16px; text-align: center; border: 1px solid #334155; }
-        h1 { color: #38bdf8; font-size: 22px; }
-        p { color: #94a3b8; }
+        body { background-color: #0b0f19; color: #f1f5f9; font-family: sans-serif; display: flex; justify-content: center; align-items: center; min-height: 100vh; margin: 0; }
+        .card { background: #111827; padding: 40px; border-radius: 16px; text-align: center; border: 1px solid #1f2937; }
+        h1 { color: #38bdf8; font-size: 20px; margin-bottom: 8px; }
+        p { color: #94a3b8; font-size: 14px; margin: 0; }
     </style>
 </head>
 <body>
@@ -460,14 +540,8 @@ def process():
     if request.headers.get("X-Forwarded-Proto") == "https" or (domain_url.startswith("http://") and not ("127.0.0.1" in domain_url or "localhost" in domain_url)):
         domain_url = domain_url.replace("http://", "https://", 1)
 
-    loader_script = (
-        f'local ok, res = pcall(function() return game:HttpGet("{domain_url}/raw/{token}") end) '
-        f'if not ok or not res or #res == 0 then warn("[Loader] Download failed: " .. tostring(res)) return end '
-        f'if res:sub(1,1) == "<" then warn("[Loader] Server returned HTML. Verify server URL.") return end '
-        f'local fn, err = loadstring(res) '
-        f'if not fn then warn("[Loader] Load Error: " .. tostring(err)) return end '
-        f'fn()'
-    )
+    # Clean Junkie-Style 1-Liner
+    loader_script = f'loadstring(game:HttpGet("{domain_url}/raw/{token}"))()'
 
     return jsonify({
         "loader": loader_script,
@@ -480,6 +554,7 @@ def serve_script(token):
     sec_fetch_dest = request.headers.get("Sec-Fetch-Dest", "").lower()
     sec_ch_ua = request.headers.get("Sec-Ch-Ua")
 
+    # Only show HTML landing page to desktop/mobile browsers navigating directly
     is_human_browser = (sec_fetch_dest == "document" and bool(sec_ch_ua))
     if is_human_browser:
         return render_template_string(PROTECTED_HTML_TEMPLATE)
