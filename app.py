@@ -12,10 +12,17 @@ app = Flask(__name__)
 app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1, x_prefix=1)
 
 # In-Memory Cache + Disk Storage
+# Format: { token: {"code": str, "password": str, "created_at": float} }
 SCRIPT_CACHE = {}
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 SAVED_DIR = os.path.join(BASE_DIR, "saved_scripts")
 os.makedirs(SAVED_DIR, exist_ok=True)
+
+
+def generate_password(length=45):
+    """Generates a secure, random password of specified length."""
+    chars = string.ascii_letters + string.digits
+    return "".join(random.choices(chars, k=length))
 
 
 def random_id(prefix=""):
@@ -104,7 +111,6 @@ return (function(...)
     local {v_char} = string.char
     local {v_concat} = table.concat
 
-    -- Safe Bitwise XOR Engine with Pure Lua Fallback
     local function {v_bxor}(a, b)
         if bit32 and bit32.bxor then return bit32.bxor(a, b) end
         if bit and bit.bxor then return bit.bxor(a, b) end
@@ -124,7 +130,6 @@ return (function(...)
         return (l + r) % 256
     end
 
-    -- Mathematical Invariant Integrity Engine (Compatible with All Executors)
     local function {v_inv_chk}()
         local m_test = (math.floor(math.sin(1.57079632679) * 100) == 100)
         local c_test = (math.cos(0) == 1)
@@ -132,7 +137,6 @@ return (function(...)
         return m_test and c_test and b_test
     end
 
-    -- Virtual Machine State Variables
     local {v_seed} = {k_seed}
     local {v_mult} = {k_mult}
     local {v_inc} = {k_inc}
@@ -146,7 +150,6 @@ return (function(...)
     local {v_idx} = 0
     local {v_disp} = {st_init}
 
-    -- VM State Machine Dispatcher
     while {v_disp} ~= 0 do
         if {v_disp} == {st_init} then
             if {v_inv_chk}() then
@@ -177,7 +180,6 @@ return (function(...)
         elseif {v_disp} == {st_exec} then
             local payload_str = {v_concat}({v_out})
             
-            -- Immediate Memory Sanitization
             {v_out} = nil
             {v_chunks} = nil
             if collectgarbage then collectgarbage("collect") end
@@ -217,6 +219,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
         .section-label { font-size: 13px; font-weight: 600; color: #a5a5a5; margin-bottom: 8px; display: block; }
         textarea { width: 100%; height: 160px; border: 1px solid #3a506b; border-radius: 10px; padding: 14px; font-family: monospace; font-size: 13px; outline: none; background-color: #0b132b; color: #6fffe9; }
         textarea:focus { border-color: #5bc0be; }
+        .pass-box { font-family: monospace; font-size: 12px; color: #ffd166; background-color: #0b132b; border: 1px solid #ffd166; padding: 10px; border-radius: 8px; word-break: break-all; margin-bottom: 14px; }
         .btn { width: 100%; padding: 14px; background-color: #5bc0be; color: #0b132b; border: none; border-radius: 8px; font-size: 15px; font-weight: 700; cursor: pointer; margin-top: 10px; transition: all 0.2s ease; }
         .btn:hover { background-color: #6fffe9; }
         .output-container { margin-top: 24px; display: none; }
@@ -225,17 +228,20 @@ HTML_TEMPLATE = """<!DOCTYPE html>
 </head>
 <body>
     <div class="card">
-        <h1>🛡️ Classicfuscator Hardened VM</h1>
+        <h1>🛡️ Classicfuscator Password Protection</h1>
 
         <div class="form-group">
             <span class="section-label">Paste Lua / Luau Source:</span>
             <textarea id="input" placeholder="print('Hello World')"></textarea>
         </div>
 
-        <button class="btn" onclick="obfuscate()">Obfuscate & Generate Loader</button>
+        <button class="btn" onclick="obfuscate()">Obfuscate & Generate Password Protected Loader</button>
 
         <div class="output-container" id="outputWrapper">
             <div class="loader-box">
+                <span class="section-label" style="color: #ffd166;">🔑 Generated 45-Character Access Key:</span>
+                <div class="pass-box" id="passDisplay">-- Password will appear here</div>
+
                 <span class="section-label" style="color: #6fffe9;">🚀 Roblox Loader Script:</span>
                 <textarea id="loaderOutput" style="height: 70px;" readonly></textarea>
                 <button class="btn" style="background-color: #3a506b; color: #ffffff;" onclick="copyLoader()">Copy Loader</button>
@@ -248,9 +254,11 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             const inputCode = document.getElementById('input').value;
             const outputWrapper = document.getElementById('outputWrapper');
             const loaderArea = document.getElementById('loaderOutput');
+            const passDisplay = document.getElementById('passDisplay');
             
             outputWrapper.style.display = "block";
-            loaderArea.value = "-- Processing Hardened VM Cipher...";
+            loaderArea.value = "-- Processing Hardened VM Cipher & Generating Access Key...";
+            passDisplay.innerText = "...";
 
             try {
                 const response = await fetch('/obfuscate', {
@@ -261,6 +269,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
 
                 const data = await response.json();
                 loaderArea.value = data.loader || "-- Error generating loader.";
+                passDisplay.innerText = data.password || "N/A";
             } catch (err) {
                 loaderArea.value = "-- Generation failed: " + err;
             }
@@ -270,7 +279,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             const loaderArea = document.getElementById('loaderOutput');
             loaderArea.select();
             navigator.clipboard.writeText(loaderArea.value);
-            alert('Loader copied to clipboard!');
+            alert('Password protected loader copied to clipboard!');
         }
     </script>
 </body>
@@ -290,56 +299,72 @@ def process():
     
     obfuscated_code = obfuscate_lua(raw_code)
     
-    # Dynamic 32-character Hex Token
+    # 1. Dynamic 32-character Hex Token
     token = uuid.uuid4().hex
     
-    # Store in RAM Cache
+    # 2. Dynamic 45-Character Password
+    password = generate_password(45)
+    
+    # 3. Save Payload + Password to RAM Cache
     SCRIPT_CACHE[token] = {
         "code": obfuscated_code,
+        "password": password,
         "created_at": time.time()
     }
     
-    # Store on Disk
+    # 4. Save Payload + Password to Disk File
     file_path = os.path.join(SAVED_DIR, f"{token}.lua")
     with open(file_path, "w", encoding="utf-8") as f:
-        f.write(obfuscated_code)
+        f.write(f"-- KEY:{password}\n" + obfuscated_code)
     
     # Enforce HTTPS URL
     domain_url = request.host_url.rstrip("/")
     if domain_url.startswith("http://") and not ("127.0.0.1" in domain_url or "localhost" in domain_url):
         domain_url = domain_url.replace("http://", "https://", 1)
 
-    loader_script = f'loadstring(game:HttpGet("{domain_url}/raw/{token}"))()'
+    # Loader format including the password key
+    loader_script = f'loadstring(game:HttpGet("{domain_url}/raw/{token}?key={password}"))()'
 
     return jsonify({
         "loader": loader_script,
-        "token": token
+        "token": token,
+        "password": password
     })
 
 
 @app.route("/raw/<token>", methods=["GET"])
 def serve_script(token):
     """
-    Serves payload to Roblox client while blocking web crawlers/browsers.
+    Serves script ONLY if the Roblox Client provides the correct 45-character password parameter (?key=...).
     """
     user_agent = request.headers.get("User-Agent", "")
+    provided_key = request.args.get("key", "").strip()
 
-    # Roblox Client Check
+    # Roblox Client User-Agent Verification
     is_local = "127.0.0.1" in request.host or "localhost" in request.host
     if not is_local and "Roblox" not in user_agent:
         return Response("-- Error 403: Access Denied. Requests must originate from Roblox Client.", status=403, mimetype="text/plain")
 
     code = None
+    expected_password = None
 
     # Check RAM Cache
     if token in SCRIPT_CACHE:
         code = SCRIPT_CACHE[token]["code"]
+        expected_password = SCRIPT_CACHE[token]["password"]
     else:
         # Check Disk Storage
         file_path = os.path.join(SAVED_DIR, f"{token}.lua")
         if os.path.exists(file_path):
             with open(file_path, "r", encoding="utf-8") as f:
-                code = f.read()
+                lines = f.readlines()
+                if lines and lines[0].startswith("-- KEY:"):
+                    expected_password = lines[0].replace("-- KEY:", "").strip()
+                    code = "".join(lines[1:])
+
+    # Password Verification Step
+    if not expected_password or provided_key != expected_password:
+        return Response("-- Error 401: Unauthorized. Invalid or missing 45-character access password.", status=401, mimetype="text/plain")
 
     if code:
         res = Response(code, mimetype="text/plain")
