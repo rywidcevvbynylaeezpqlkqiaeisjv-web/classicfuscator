@@ -12,7 +12,10 @@ from werkzeug.middleware.proxy_fix import ProxyFix
 app = Flask(__name__)
 app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1, x_prefix=1)
 
-# Persistent Database & Directory Storage
+# Set custom domain for Render (auto-detects if left empty)
+CUSTOM_DOMAIN = "https://classicfuscator.onrender.com"
+
+# Persistent Storage Paths
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 SAVED_DIR = os.path.join(BASE_DIR, "saved_scripts")
 DB_PATH = os.path.join(BASE_DIR, "database.db")
@@ -22,7 +25,7 @@ SCRIPT_CACHE = {}
 
 
 def init_db():
-    """Initializes persistent SQLite database for tokens across server restarts."""
+    """Initializes SQLite database to persist tokens across server restarts."""
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
     c.execute(
@@ -536,11 +539,15 @@ def process():
     except Exception as e:
         print("DB Save Error:", e)
     
-    domain_url = request.host_url.rstrip("/")
-    if request.headers.get("X-Forwarded-Proto") == "https" or (domain_url.startswith("http://") and not ("127.0.0.1" in domain_url or "localhost" in domain_url)):
-        domain_url = domain_url.replace("http://", "https://", 1)
+    # Resolve exact HTTPS domain URL
+    if CUSTOM_DOMAIN:
+        domain_url = CUSTOM_DOMAIN.rstrip("/")
+    else:
+        domain_url = request.host_url.rstrip("/")
+        if request.headers.get("X-Forwarded-Proto") == "https" or (domain_url.startswith("http://") and not ("127.0.0.1" in domain_url or "localhost" in domain_url)):
+            domain_url = domain_url.replace("http://", "https://", 1)
 
-    # Clean Junkie-Style 1-Liner
+    # Clean 1-Liner Junkie-Style Output
     loader_script = f'loadstring(game:HttpGet("{domain_url}/raw/{token}"))()'
 
     return jsonify({
@@ -554,7 +561,7 @@ def serve_script(token):
     sec_fetch_dest = request.headers.get("Sec-Fetch-Dest", "").lower()
     sec_ch_ua = request.headers.get("Sec-Ch-Ua")
 
-    # Only show HTML landing page to desktop/mobile browsers navigating directly
+    # Only show HTML landing page to real desktop/mobile browsers navigating directly
     is_human_browser = (sec_fetch_dest == "document" and bool(sec_ch_ua))
     if is_human_browser:
         return render_template_string(PROTECTED_HTML_TEMPLATE)
