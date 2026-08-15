@@ -12,7 +12,6 @@ app = Flask(__name__)
 app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1, x_prefix=1)
 
 # In-Memory Cache + Disk Storage
-# Format: { token: {"code": str, "password": str, "created_at": float} }
 SCRIPT_CACHE = {}
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 SAVED_DIR = os.path.join(BASE_DIR, "saved_scripts")
@@ -41,7 +40,6 @@ def obfuscate_lua(code: str) -> str:
     if not code.strip():
         return "-- Error: Empty script provided."
 
-    # 1. Polynomial Cipher Keys & Rolling State Seed
     k_seed = random.randint(10000, 999999)
     k_mult = random.randint(5, 29) * 2 + 1
     k_inc = random.randint(1, 255)
@@ -49,7 +47,6 @@ def obfuscate_lua(code: str) -> str:
     k_mask = random.randint(16, 240)
     k_poly1 = random.randint(3, 17)
 
-    # 2. Rolling-Key Positional Encryption
     raw_bytes = list(code.encode("utf-8"))
     encrypted_bytes = []
     
@@ -61,7 +58,6 @@ def obfuscate_lua(code: str) -> str:
         enc = (rotated ^ current_key ^ k_mask ^ pos_key) % 256
         encrypted_bytes.append(enc)
 
-    # 3. Dynamic Sub-Table Chunking
     chunk_size = random.randint(12, 28)
     chunks = [
         encrypted_bytes[i : i + chunk_size]
@@ -69,14 +65,12 @@ def obfuscate_lua(code: str) -> str:
     ]
     chunks_lua = "{" + ",".join("{" + ",".join(map(str, c)) + "}" for c in chunks) + "}"
 
-    # 4. Randomized VM State Identifiers
     st_init = random.randint(100, 199)
     st_check = random.randint(200, 299)
     st_unpack = random.randint(300, 399)
     st_exec = random.randint(400, 499)
     st_trap = random.randint(500, 599)
 
-    # 5. Identifier Names Generator
     v_seed = random_id("S")
     v_mult = random_id("M")
     v_inc = random_id("C")
@@ -98,7 +92,6 @@ def obfuscate_lua(code: str) -> str:
     v_disp = random_id("Disp")
     v_inv_chk = random_id("Inv")
 
-    # 6. Hardened VM State-Machine Stub
     lua_stub = f"""--[[ Classicfuscator v5 Hardened VM ]]--
 return (function(...)
     local {v_env} = (getgenv and getgenv()) or _ENV or _G
@@ -204,47 +197,57 @@ end)(...)"""
     return lua_stub.strip()
 
 
+# Original Light Theme Template
 HTML_TEMPLATE = """<!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Classicfuscator Enterprise - Hardened VM</title>
+    <title>Classicfuscator - Free Online Roblox & Luau Script Obfuscator</title>
+
     <style>
         * { box-sizing: border-box; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
-        body { background-color: #0b132b; color: #f8fafc; margin: 0; padding: 40px 20px; display: flex; justify-content: center; align-items: center; min-height: 100vh; }
-        .card { background: #1c2541; border-radius: 16px; box-shadow: 0 20px 50px rgba(0, 0, 0, 0.5); width: 100%; max-width: 640px; padding: 32px; border: 1px solid #3a506b; }
-        h1 { font-size: 24px; font-weight: 800; color: #6fffe9; margin: 0 0 20px 0; }
+        body { background-color: #f0f7ff; color: #1e293b; margin: 0; padding: 40px 20px; display: flex; justify-content: center; align-items: center; min-height: 100vh; }
+        .card { background: #ffffff; border-radius: 20px; box-shadow: 0 12px 40px rgba(0, 112, 243, 0.08); width: 100%; max-width: 620px; padding: 36px; border: 1px solid #e2e8f0; position: relative; }
+        .header-bar { display: flex; justify-content: space-between; align-items: center; margin-bottom: 24px; }
+        h1 { font-size: 26px; font-weight: 800; color: #0070f3; margin: 0; letter-spacing: -0.5px; }
         .form-group { margin-bottom: 18px; }
-        .section-label { font-size: 13px; font-weight: 600; color: #a5a5a5; margin-bottom: 8px; display: block; }
-        textarea { width: 100%; height: 160px; border: 1px solid #3a506b; border-radius: 10px; padding: 14px; font-family: monospace; font-size: 13px; outline: none; background-color: #0b132b; color: #6fffe9; }
-        textarea:focus { border-color: #5bc0be; }
-        .pass-box { font-family: monospace; font-size: 12px; color: #ffd166; background-color: #0b132b; border: 1px solid #ffd166; padding: 10px; border-radius: 8px; word-break: break-all; margin-bottom: 14px; }
-        .btn { width: 100%; padding: 14px; background-color: #5bc0be; color: #0b132b; border: none; border-radius: 8px; font-size: 15px; font-weight: 700; cursor: pointer; margin-top: 10px; transition: all 0.2s ease; }
-        .btn:hover { background-color: #6fffe9; }
+        .section-label { font-size: 14px; font-weight: 600; color: #475569; margin-bottom: 8px; display: block; }
+        textarea { width: 100%; height: 160px; border: 1px solid #cbd5e1; border-radius: 12px; padding: 14px; font-family: "Fira Code", monospace, sans-serif; font-size: 13px; resize: vertical; outline: none; background-color: #ffffff; color: #0f172a; }
+        textarea:focus { border-color: #0070f3; box-shadow: 0 0 0 3px rgba(0, 112, 243, 0.15); }
+        .btn { width: 100%; padding: 14px; background-color: #0070f3; color: white; border: none; border-radius: 10px; font-size: 15px; font-weight: 700; cursor: pointer; margin-top: 14px; box-shadow: 0 4px 14px rgba(0, 112, 243, 0.25); transition: all 0.2s ease; }
+        .btn:hover { background-color: #005bb5; transform: translateY(-1px); }
+        .btn-copy { background-color: #0070f3; margin-top: 8px; }
         .output-container { margin-top: 24px; display: none; }
-        .loader-box { background: #0b132b; border: 1px solid #5bc0be; border-radius: 10px; padding: 16px; }
+        .loader-box { background: #f0f7ff; border: 1px solid #0070f3; border-radius: 12px; padding: 18px; margin-bottom: 16px; }
+        .password-box { background: #fffbe3; border: 1px solid #f59e0b; border-radius: 12px; padding: 18px; margin-bottom: 16px; }
+        .password-text { font-family: "Fira Code", monospace, sans-serif; font-size: 13px; color: #b45309; word-break: break-all; font-weight: 700; background: #ffffff; padding: 10px; border-radius: 8px; border: 1px solid #fde68a; margin-top: 6px; }
     </style>
 </head>
 <body>
     <div class="card">
-        <h1>🛡️ Classicfuscator Password Protection</h1>
-
-        <div class="form-group">
-            <span class="section-label">Paste Lua / Luau Source:</span>
-            <textarea id="input" placeholder="print('Hello World')"></textarea>
+        <div class="header-bar">
+            <h1>Classicfuscator</h1>
         </div>
 
-        <button class="btn" onclick="obfuscate()">Obfuscate & Generate Password Protected Loader</button>
+        <div class="form-group">
+            <span class="section-label">Paste Lua Code:</span>
+            <textarea id="input" placeholder="print('Hello World!')"></textarea>
+        </div>
+
+        <button class="btn" id="obfuscateBtn" onclick="obfuscate()">Obfuscate & Generate Loader</button>
 
         <div class="output-container" id="outputWrapper">
-            <div class="loader-box">
-                <span class="section-label" style="color: #ffd166;">🔑 Generated 45-Character Access Key:</span>
-                <div class="pass-box" id="passDisplay">-- Password will appear here</div>
+            <div class="password-box">
+                <span class="section-label" style="color: #b45309; font-weight: 700;">🔑 Owner Password (45 Characters):</span>
+                <div class="password-text" id="passwordOutput">-- Password will appear here</div>
+                <button class="btn" style="background-color: #d97706; margin-top: 10px;" onclick="copyPassword()">Copy Password</button>
+            </div>
 
-                <span class="section-label" style="color: #6fffe9;">🚀 Roblox Loader Script:</span>
+            <div class="loader-box">
+                <span class="section-label" style="color: #0070f3; font-weight: 700;">🚀 Roblox Loader Script:</span>
                 <textarea id="loaderOutput" style="height: 70px;" readonly></textarea>
-                <button class="btn" style="background-color: #3a506b; color: #ffffff;" onclick="copyLoader()">Copy Loader</button>
+                <button class="btn btn-copy" onclick="copyLoader()">Copy Roblox Loader</button>
             </div>
         </div>
     </div>
@@ -254,11 +257,11 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             const inputCode = document.getElementById('input').value;
             const outputWrapper = document.getElementById('outputWrapper');
             const loaderArea = document.getElementById('loaderOutput');
-            const passDisplay = document.getElementById('passDisplay');
+            const passwordArea = document.getElementById('passwordOutput');
             
             outputWrapper.style.display = "block";
-            loaderArea.value = "-- Processing Hardened VM Cipher & Generating Access Key...";
-            passDisplay.innerText = "...";
+            loaderArea.value = "-- Obfuscating & generating loader, please wait...";
+            passwordArea.innerText = "...";
 
             try {
                 const response = await fetch('/obfuscate', {
@@ -269,9 +272,9 @@ HTML_TEMPLATE = """<!DOCTYPE html>
 
                 const data = await response.json();
                 loaderArea.value = data.loader || "-- Error generating loader.";
-                passDisplay.innerText = data.password || "N/A";
+                passwordArea.innerText = data.password || "N/A";
             } catch (err) {
-                loaderArea.value = "-- Generation failed: " + err;
+                loaderArea.value = "-- Loader generation failed: " + err;
             }
         }
 
@@ -279,9 +282,53 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             const loaderArea = document.getElementById('loaderOutput');
             loaderArea.select();
             navigator.clipboard.writeText(loaderArea.value);
-            alert('Password protected loader copied to clipboard!');
+            alert('Roblox Loader copied to clipboard!');
+        }
+
+        function copyPassword() {
+            const passText = document.getElementById('passwordOutput').innerText;
+            navigator.clipboard.writeText(passText);
+            alert('Owner Password copied to clipboard!');
         }
     </script>
+</body>
+</html>
+"""
+
+# Light Theme Password Prompt for Web Browsers
+PASSWORD_PROMPT_TEMPLATE = """<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Protected Endpoint - Classicfuscator</title>
+    <style>
+        * { box-sizing: border-box; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+        body { background-color: #f0f7ff; color: #1e293b; margin: 0; padding: 40px 20px; display: flex; justify-content: center; align-items: center; min-height: 100vh; }
+        .card { background: #ffffff; border-radius: 20px; box-shadow: 0 12px 40px rgba(0, 112, 243, 0.08); width: 100%; max-width: 480px; padding: 36px; border: 1px solid #e2e8f0; text-align: center; }
+        h1 { font-size: 22px; font-weight: 800; color: #0070f3; margin: 0 0 10px 0; }
+        p { font-size: 14px; color: #475569; margin-bottom: 20px; }
+        input[type="password"] { width: 100%; padding: 14px; border: 1px solid #cbd5e1; border-radius: 10px; font-family: monospace; font-size: 14px; outline: none; background-color: #ffffff; color: #0f172a; margin-bottom: 14px; text-align: center; }
+        input[type="password"]:focus { border-color: #0070f3; box-shadow: 0 0 0 3px rgba(0, 112, 243, 0.15); }
+        .btn { width: 100%; padding: 14px; background-color: #0070f3; color: white; border: none; border-radius: 10px; font-size: 15px; font-weight: 700; cursor: pointer; transition: all 0.2s ease; }
+        .btn:hover { background-color: #005bb5; }
+        .error { color: #e11d48; font-size: 13px; margin-top: 12px; font-weight: 600; }
+    </style>
+</head>
+<body>
+    <div class="card">
+        <h1>🔒 Owner Authentication</h1>
+        <p>This script endpoint is protected. Enter your 45-character Owner Password to view the code.</p>
+
+        <form method="POST" action="/raw/{{ token }}">
+            <input type="password" name="password" placeholder="Enter 45-character key..." required autocomplete="off">
+            <button type="submit" class="btn">View Source Code</button>
+        </form>
+
+        {% if error %}
+            <div class="error">{{ error }}</div>
+        {% endif %}
+    </div>
 </body>
 </html>
 """
@@ -299,31 +346,26 @@ def process():
     
     obfuscated_code = obfuscate_lua(raw_code)
     
-    # 1. Dynamic 32-character Hex Token
     token = uuid.uuid4().hex
-    
-    # 2. Dynamic 45-Character Password
     password = generate_password(45)
     
-    # 3. Save Payload + Password to RAM Cache
+    # Store in RAM
     SCRIPT_CACHE[token] = {
         "code": obfuscated_code,
         "password": password,
         "created_at": time.time()
     }
     
-    # 4. Save Payload + Password to Disk File
+    # Store on Disk
     file_path = os.path.join(SAVED_DIR, f"{token}.lua")
     with open(file_path, "w", encoding="utf-8") as f:
         f.write(f"-- KEY:{password}\n" + obfuscated_code)
     
-    # Enforce HTTPS URL
     domain_url = request.host_url.rstrip("/")
     if domain_url.startswith("http://") and not ("127.0.0.1" in domain_url or "localhost" in domain_url):
         domain_url = domain_url.replace("http://", "https://", 1)
 
-    # Loader format including the password key
-    loader_script = f'loadstring(game:HttpGet("{domain_url}/raw/{token}?key={password}"))()'
+    loader_script = f'loadstring(game:HttpGet("{domain_url}/raw/{token}"))()'
 
     return jsonify({
         "loader": loader_script,
@@ -332,28 +374,17 @@ def process():
     })
 
 
-@app.route("/raw/<token>", methods=["GET"])
+@app.route("/raw/<token>", methods=["GET", "POST"])
 def serve_script(token):
-    """
-    Serves script ONLY if the Roblox Client provides the correct 45-character password parameter (?key=...).
-    """
     user_agent = request.headers.get("User-Agent", "")
-    provided_key = request.args.get("key", "").strip()
-
-    # Roblox Client User-Agent Verification
-    is_local = "127.0.0.1" in request.host or "localhost" in request.host
-    if not is_local and "Roblox" not in user_agent:
-        return Response("-- Error 403: Access Denied. Requests must originate from Roblox Client.", status=403, mimetype="text/plain")
 
     code = None
     expected_password = None
 
-    # Check RAM Cache
     if token in SCRIPT_CACHE:
         code = SCRIPT_CACHE[token]["code"]
         expected_password = SCRIPT_CACHE[token]["password"]
     else:
-        # Check Disk Storage
         file_path = os.path.join(SAVED_DIR, f"{token}.lua")
         if os.path.exists(file_path):
             with open(file_path, "r", encoding="utf-8") as f:
@@ -362,18 +393,30 @@ def serve_script(token):
                     expected_password = lines[0].replace("-- KEY:", "").strip()
                     code = "".join(lines[1:])
 
-    # Password Verification Step
-    if not expected_password or provided_key != expected_password:
-        return Response("-- Error 401: Unauthorized. Invalid or missing 45-character access password.", status=401, mimetype="text/plain")
+    if not code or not expected_password:
+        return Response("-- Error 404: Script token not found or expired.", status=404, mimetype="text/plain")
 
-    if code:
+    # Roblox Game Client Request: Returns payload directly to game:HttpGet
+    if "Roblox" in user_agent:
         res = Response(code, mimetype="text/plain")
         res.headers["Access-Control-Allow-Origin"] = "*"
         res.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
         res.headers["Pragma"] = "no-cache"
         return res
 
-    return Response("-- Error 404: Invalid or Expired Token.", status=404, mimetype="text/plain")
+    # Web Browser Request: Requires 45-character password
+    submitted_pass = request.form.get("password") or request.args.get("password", "")
+
+    if submitted_pass and submitted_pass.strip() == expected_password:
+        res = Response(code, mimetype="text/plain")
+        res.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+        return res
+
+    error_msg = ""
+    if submitted_pass:
+        error_msg = "❌ Invalid 45-character password. Access denied."
+
+    return render_template_string(PASSWORD_PROMPT_TEMPLATE, token=token, error=error_msg)
 
 
 if __name__ == "__main__":
