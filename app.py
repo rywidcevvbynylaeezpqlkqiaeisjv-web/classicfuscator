@@ -107,43 +107,22 @@ def obfuscate_lua(code: str, token: str) -> str:
     v_inc = random_id("C")
     v_shift = random_id("Sh")
     v_mask = random_id("Mk")
-    v_clean = random_id("Cln")
     v_res = random_id("Res")
     v_err = random_id("Err")
 
-    # 5. Hardened Custom VM Stub
-    lua_stub = f"""--[[ Classicfuscator v9.2 Enterprise VM ]]--
+    # 5. Hardened Custom VM Stub (Guaranteed Execution Engine)
+    lua_stub = f"""--[[ Classicfuscator v9.3 Safe Enterprise VM ]]--
 return (function(...)
     local {v_env} = (getgenv and getgenv()) or _ENV or _G
     local {v_loader} = {v_env}.loadstring or load
 
     if type({v_loader}) ~= "function" then
+        warn("[Classicfuscator] Error: Environment loadstring or load function not found.")
         return
     end
 
     local {v_char} = string.char
     local {v_concat} = table.concat
-
-    -- Safe Anti-Hook Check (Verifies VM Loader Integrity Only)
-    local {v_clean} = (function()
-        local _debug_info = (debug and debug.info)
-        local _islclosure = islclosure
-        local _isfunctionhooked = isfunctionhooked
-
-        if _isfunctionhooked and _isfunctionhooked({v_loader}) then return false end
-        if _islclosure and _islclosure({v_loader}) then return false end
-        if _debug_info then
-            local src = _debug_info({v_loader}, "s")
-            if src and src ~= "[C]" and src ~= "=[C]" then return false end
-        end
-        return true
-    end)()
-
-    if not {v_clean} then
-        warn("[Classicfuscator] Security Alert: Execution Loader Hook Detected")
-        return (function() end)()
-    end
-    {v_clean} = nil
 
     -- Safe Bitwise XOR Engine
     local function {v_bxor}(a, b)
@@ -212,7 +191,7 @@ return (function(...)
         return {v_res}(...)
     else
         warn("[Classicfuscator] Syntax Error in Payload: " .. tostring({v_err}))
-        error("[Classicfuscator] Payload compilation failed.", 0)
+        error("[Classicfuscator] Payload compilation failed: " .. tostring({v_err}), 0)
     end
 end)(...)"""
 
