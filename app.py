@@ -6,13 +6,15 @@ import sqlite3
 import string
 import time
 import uuid
+import ast
+import operator
 from flask import Flask, jsonify, render_template_string, request, Response
 from werkzeug.middleware.proxy_fix import ProxyFix
 
 app = Flask(__name__)
 app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1, x_prefix=1)
 
-# Render Custom Domain Configuration (auto-detects if left blank)
+# Render Custom Domain Configuration
 CUSTOM_DOMAIN = "https://classicfuscator.onrender.com"
 
 # Persistent Storage Paths
@@ -22,7 +24,6 @@ DB_PATH = os.path.join(BASE_DIR, "database.db")
 os.makedirs(SAVED_DIR, exist_ok=True)
 
 SCRIPT_CACHE = {}
-
 
 def init_db():
     """Initializes SQLite database to persist tokens across server restarts."""
@@ -35,16 +36,13 @@ def init_db():
     conn.commit()
     conn.close()
 
-
 init_db()
-
 
 def random_id(prefix=""):
     """Generates homoglyph-style confusing variable names."""
     chars = ["I", "l", "1", "_"]
     body = "".join(random.choices(chars, k=random.randint(20, 28)))
     return f"{prefix}_{body}"
-
 
 def ror(val, count, bits=8):
     """Rotate Right for 8-bit integer."""
@@ -75,7 +73,6 @@ TOKEN_SPEC = [
 ]
 TOKEN_REGEX = re.compile("|".join(f"(?P<{name}>{pattern})" for name, pattern in TOKEN_SPEC))
 
-
 def validate_lua_syntax(lua_code: str) -> tuple[bool, str]:
     if not lua_code or not lua_code.strip():
         return False, "Input code is empty."
@@ -98,11 +95,6 @@ def validate_lua_syntax(lua_code: str) -> tuple[bool, str]:
         if kind != "WHITESPACE" and not kind.startswith("COMMENT"):
             tokens.append((kind, val))
 
-    if pos < len(lua_code):
-        unparsed = lua_code[pos:].strip()
-        if unparsed:
-            return False, f"Unclosed literal or token near '{unparsed}'"
-
     for idx, (kind, val) in enumerate(tokens):
         prev_val = tokens[idx - 1][1] if idx > 0 else ""
 
@@ -118,14 +110,10 @@ def validate_lua_syntax(lua_code: str) -> tuple[bool, str]:
                     return False, f"Mismatched bracket: expected closing for '{last_b}', got '{val}'"
 
         if kind == "IDENTIFIER" and prev_val not in (".", ":"):
-            if val == "function":
-                block_stack.append("function")
-            elif val == "do":
-                block_stack.append("do")
-            elif val == "then":
-                block_stack.append("if")
-            elif val == "repeat":
-                block_stack.append("repeat")
+            if val == "function": block_stack.append("function")
+            elif val == "do": block_stack.append("do")
+            elif val == "then": block_stack.append("if")
+            elif val == "repeat": block_stack.append("repeat")
             elif val in ("elseif", "else"):
                 if not block_stack or block_stack[-1] != "if":
                     return False, f"Unexpected '{val}' without matching 'if/then'"
@@ -140,11 +128,8 @@ def validate_lua_syntax(lua_code: str) -> tuple[bool, str]:
                     return False, "Unexpected 'until' with no matching 'repeat'"
                 block_stack.pop()
 
-    if bracket_stack:
-        return False, f"Unclosed bracket '{bracket_stack[-1]}'"
-
-    if block_stack:
-        return False, f"Missing 'end' or 'until' for unclosed '{block_stack[-1]}' block"
+    if bracket_stack: return False, f"Unclosed bracket '{bracket_stack[-1]}'"
+    if block_stack: return False, f"Missing 'end' or 'until' for unclosed '{block_stack[-1]}' block"
 
     return True, ""
 
@@ -154,7 +139,6 @@ def validate_lua_syntax(lua_code: str) -> tuple[bool, str]:
 # ==============================================================================
 
 def decode_lua_string_bytes(str_val: str) -> bytes:
-    """Safely decodes Lua string literal escape sequences into raw bytes."""
     if (str_val.startswith('"') and str_val.endswith('"')) or (str_val.startswith("'") and str_val.endswith("'")):
         inner = str_val[1:-1]
     elif str_val.startswith("["):
@@ -164,8 +148,7 @@ def decode_lua_string_bytes(str_val: str) -> bytes:
         return str_val.encode("utf-8")
 
     out = bytearray()
-    i = 0
-    n = len(inner)
+    i, n = 0, len(inner)
     while i < n:
         ch = inner[i]
         if ch == '\\' and i + 1 < n:
@@ -176,42 +159,25 @@ def decode_lua_string_bytes(str_val: str) -> bytes:
             elif nxt == '\\': out.append(92); i += 2
             elif nxt == '"': out.append(34); i += 2
             elif nxt == "'": out.append(39); i += 2
-            elif nxt == 'a': out.append(7); i += 2
-            elif nxt == 'b': out.append(8); i += 2
-            elif nxt == 'v': out.append(11); i += 2
-            elif nxt == 'f': out.append(12); i += 2
             elif nxt == 'x' and i + 3 < n:
-                try:
-                    out.append(int(inner[i+2:i+4], 16))
-                    i += 4
-                except ValueError:
-                    out.append(ord(ch)); i += 1
+                try: out.append(int(inner[i+2:i+4], 16)); i += 4
+                except ValueError: out.append(ord(ch)); i += 1
             elif nxt.isdigit():
                 j = i + 1
-                while j < min(i + 4, n) and inner[j].isdigit():
-                    j += 1
+                while j < min(i + 4, n) and inner[j].isdigit(): j += 1
                 out.append(int(inner[i+1:j]) % 256)
                 i = j
             else:
-                out.append(ord(nxt))
-                i += 2
+                out.append(ord(nxt)); i += 2
         else:
             out.extend(ch.encode("utf-8"))
             i += 1
     return bytes(out)
 
-
 def transform_number(num_str: str) -> str:
     try:
-        if num_str.lower().startswith("0x"):
-            val = int(num_str, 16)
-        elif "." in num_str or "e" in num_str.lower():
-            return num_str
-        else:
-            val = int(num_str)
-
-        if val < 0 or val > 65535:
-            return num_str
+        val = int(num_str, 16) if num_str.lower().startswith("0x") else int(num_str) if "." not in num_str and "e" not in num_str.lower() else float(num_str)
+        if isinstance(val, float) or val < 0 or val > 65535: return num_str
 
         mode = random.randint(1, 4)
         if mode == 1:
@@ -219,48 +185,31 @@ def transform_number(num_str: str) -> str:
             return f"(({val + offset}) - {offset})"
         elif mode == 2:
             mult = random.randint(2, 8)
-            base = val * mult
-            return f"(({base} / {mult}))"
+            return f"(({val * mult} / {mult}))"
         elif mode == 3:
             xor_key = random.randint(1, 255)
-            xor_res = val ^ xor_key
-            return f"((bit32 and bit32.bxor({xor_res}, {xor_key})) or ({val}))"
+            return f"((bit32 and bit32.bxor({val ^ xor_key}, {xor_key})) or ({val}))"
         else:
             p1 = random.randint(10, 100)
-            p2 = val + p1 * 2
-            return f"(({p2} - ({p1} * 2)))"
+            return f"(({val + p1 * 2} - ({p1} * 2)))"
     except Exception:
         return num_str
 
-
 def transform_string(str_val: str, dec_func_name: str) -> str:
     raw_bytes = list(decode_lua_string_bytes(str_val))
-    key = random.randint(1, 255)
-    mask = random.randint(1, 255)
-    
-    enc_bytes = []
-    for idx, b in enumerate(raw_bytes):
-        pos_k = (key + (idx * 7) + 11) % 256
-        enc_bytes.append((b ^ pos_k ^ mask) % 256)
-        
-    bytes_table = "{" + ",".join(map(str, enc_bytes)) + "}"
-    return f"{dec_func_name}({bytes_table}, {key}, {mask})"
-
+    key, mask = random.randint(1, 255), random.randint(1, 255)
+    enc_bytes = [((b ^ mask) ^ ((key + (idx * 7) + 11) % 256)) % 256 for idx, b in enumerate(raw_bytes)]
+    return f"{dec_func_name}({{{','.join(map(str, enc_bytes))}}}, {key}, {mask})"
 
 def ast_obfuscate(lua_code: str, dec_func_name: str, settings: dict) -> str:
-    tokens = []
-    for match in TOKEN_REGEX.finditer(lua_code):
-        kind = match.lastgroup
-        val = match.group()
-        tokens.append((kind, val))
-
+    tokens = [(m.lastgroup, m.group()) for m in TOKEN_REGEX.finditer(lua_code)]
     renamed_map = {}
+    
     if settings.get("homoglyphs", True):
         for i, (kind, val) in enumerate(tokens):
             if kind == "IDENTIFIER" and val in ("local", "function", "for"):
                 j = i + 1
-                while j < len(tokens) and tokens[j][0] == "WHITESPACE":
-                    j += 1
+                while j < len(tokens) and tokens[j][0] == "WHITESPACE": j += 1
                 if j < len(tokens) and tokens[j][0] == "IDENTIFIER" and tokens[j][1] not in LUA_KEYWORDS:
                     var_name = tokens[j][1]
                     if var_name not in renamed_map and len(var_name) > 1:
@@ -268,47 +217,25 @@ def ast_obfuscate(lua_code: str, dec_func_name: str, settings: dict) -> str:
 
     output = []
     for i, (kind, val) in enumerate(tokens):
-        prev_non_ws = None
-        for k in range(i - 1, -1, -1):
-            if tokens[k][0] != "WHITESPACE":
-                prev_non_ws = tokens[k]
-                break
+        prev_non_ws = next((tokens[k] for k in range(i - 1, -1, -1) if tokens[k][0] != "WHITESPACE"), None)
+        next_non_ws = next((tokens[k] for k in range(i + 1, len(tokens)) if tokens[k][0] != "WHITESPACE"), None)
+        is_prop = prev_non_ws and prev_non_ws[1] in (".", ":")
 
-        next_non_ws = None
-        for k in range(i + 1, len(tokens)):
-            if tokens[k][0] != "WHITESPACE":
-                next_non_ws = tokens[k]
-                break
-
-        is_property_or_field = prev_non_ws and prev_non_ws[1] in (".", ":")
-
-        if kind in ("COMMENT_LONG", "COMMENT_SHORT"):
-            output.append(" ")
+        if kind in ("COMMENT_LONG", "COMMENT_SHORT"): output.append(" ")
         elif kind in ("STRING_LONG", "STRING_SQ", "STRING_DQ"):
-            if settings.get("string_enc", True):
-                output.append(transform_string(val, dec_func_name))
-            else:
-                output.append(val)
+            output.append(transform_string(val, dec_func_name) if settings.get("string_enc", True) else val)
         elif kind in ("NUMBER_HEX", "NUMBER_DEC"):
-            if settings.get("number_mut", True):
-                output.append(transform_number(val))
-            else:
-                output.append(val)
+            output.append(transform_number(val) if settings.get("number_mut", True) else val)
         elif kind == "IDENTIFIER":
-            if settings.get("number_mut", True) and val == "true" and not is_property_or_field:
-                k1 = random.randint(10, 99)
-                output.append(f"({k1} == {k1})")
-            elif settings.get("number_mut", True) and val == "false" and not is_property_or_field:
+            if settings.get("number_mut", True) and val == "true" and not is_prop:
+                output.append(f"({random.randint(10, 99)} == {random.randint(10, 99)})")
+            elif settings.get("number_mut", True) and val == "false" and not is_prop:
                 k1 = random.randint(10, 99)
                 output.append(f"({k1} == {k1 + 1})")
-            elif settings.get("number_mut", True) and val == "nil" and not is_property_or_field:
+            elif settings.get("number_mut", True) and val == "nil" and not is_prop:
                 output.append("({[0]=nil}[1])")
-            elif val in renamed_map:
-                is_table_key = next_non_ws and next_non_ws[1] == "="
-                if is_property_or_field or is_table_key:
-                    output.append(val)
-                else:
-                    output.append(renamed_map[val])
+            elif val in renamed_map and not (is_prop or (next_non_ws and next_non_ws[1] == "=")):
+                output.append(renamed_map[val])
             else:
                 output.append(val)
         elif kind == "WHITESPACE":
@@ -319,249 +246,275 @@ def ast_obfuscate(lua_code: str, dec_func_name: str, settings: dict) -> str:
     return "".join(output)
 
 
-# ==============================================================================
-# 3. RECURSIVE MULTI-LAYER VM ENGINE
-# ==============================================================================
-
 def build_vm_layer(payload_code: str, dec_func_name: str, settings: dict, is_outer: bool) -> str:
     raw_bytes = list(payload_code.encode("utf-8"))
-    k_seed = random.randint(100000, 999999)
-    k_mult = random.randint(5, 29) * 2 + 1
-    k_inc = random.randint(1, 255)
-    k_shift = random.randint(1, 7)
-    k_mask = random.randint(16, 240)
+    k_seed, k_mult, k_inc, k_shift, k_mask = random.randint(100000, 999999), random.randint(5, 29) * 2 + 1, random.randint(1, 255), random.randint(1, 7), random.randint(16, 240)
 
-    encrypted_bytes = []
-    c_key = k_seed
+    encrypted_bytes, c_key = [], k_seed
     for idx, byte in enumerate(raw_bytes):
         c_key = (c_key * k_mult + k_inc + idx * 13) % 256
-        rotated = ror(byte, k_shift)
-        pos_key = (idx * 7 + 13) % 256
-        enc = (rotated ^ c_key ^ k_mask ^ pos_key) % 256
-        encrypted_bytes.append(enc)
+        encrypted_bytes.append((ror(byte, k_shift) ^ c_key ^ k_mask ^ ((idx * 7 + 13) % 256)) % 256)
 
     chunk_size = random.randint(16, 32)
-    chunks = [
-        encrypted_bytes[i : i + chunk_size]
-        for i in range(0, len(encrypted_bytes), chunk_size)
-    ]
-
+    chunks = [encrypted_bytes[i : i + chunk_size] for i in range(0, len(encrypted_bytes), chunk_size)]
     chunk_states = list(range(100, 100 + len(chunks)))
-    state_map = {}
-    for idx, state_id in enumerate(chunk_states):
-        next_state = chunk_states[idx + 1] if idx + 1 < len(chunk_states) else 0
-        state_map[state_id] = (chunks[idx], next_state)
+    state_map = {state_id: (chunks[idx], chunk_states[idx + 1] if idx + 1 < len(chunk_states) else 0) for idx, state_id in enumerate(chunk_states)}
 
     chunks_lua = "{" + ",".join(f"[{s}]={'{' + ','.join(map(str, c[0])) + '}'}" for s, c in state_map.items()) + "}"
     trans_lua = "{" + ",".join(f"[{s}]={c[1]}" for s, c in state_map.items()) + "}"
-    start_state = chunk_states[0] if chunk_states else 0
 
-    v_loader = random_id("Ld")
-    v_char = random_id("Chr")
-    v_concat = random_id("Cat")
-    v_bxor = random_id("Bx")
-    v_rol = random_id("Rl")
-    v_chunks = random_id("Data")
-    v_trans = random_id("Tr")
-    v_state = random_id("St")
-    v_out = random_id("Out")
-    v_idx = random_id("Idx")
-    v_seed = random_id("Sd")
-    v_mult = random_id("M")
-    v_inc = random_id("C")
-    v_shift = random_id("Sh")
-    v_mask = random_id("Mk")
-    v_res = random_id("Res")
-    v_err = random_id("Err")
-    v_genv = random_id("Genv")
+    v_genv, v_loader, v_seed = random_id("Genv"), random_id("Ld"), random_id("Sd")
     v_anti = random_id("Anti")
 
-    anti_hook_code = ""
-    if settings.get("antihook", True):
-        anti_hook_code = f"""
+    anti_hook_code = f"""
     local function {v_anti}()
+        local ts, p = tostring, pcall
         if debug and (debug.info or debug.getinfo) then
-            local get_i = debug.info or debug.getinfo
-            local ok, info = pcall(function() return get_i(1, "slna") end)
+            local ok, info = p(function() return (debug.info or debug.getinfo)(1, "slna") end)
             if not ok then return false end
         end
-        local ts = tostring
-        if ts(pcall):find("hook") or ts(ts):find("hook") or ts(type):find("hook") or ts(setmetatable):find("hook") then
-            return false
-        end
+        if ts(p):find("hook") or ts(ts):find("hook") or ts(type):find("hook") or ts(setmetatable):find("hook") then return false end
         if getrawmetatable then
             local mt = getrawmetatable({v_genv})
-            if mt and (rawget(mt, "__index") or rawget(mt, "__namecall")) then
-                local idx = rawget(mt, "__index")
-                if type(idx) == "function" and ts(idx):find("hook") then
-                    return false
-                end
-            end
+            if mt and (rawget(mt, "__index") or rawget(mt, "__namecall")) then return false end
         end
         return true
     end
-
     local {v_seed} = {k_seed}
-    if not {v_anti}() then
-        {v_seed} = ({v_seed} ^ 0xDEADBEEF) % 256
-        while true do end
-        return
-    end
-"""
-    else:
-        anti_hook_code = f"    local {v_seed} = {k_seed}\n"
+    if not {v_anti}() then while true do end return end
+""" if settings.get("antihook", True) else f"    local {v_seed} = {k_seed}\n"
 
-    string_dec_block = ""
-    if settings.get("string_enc", True) and is_outer:
-        string_dec_block = f"""
+    string_dec_block = f"""
     {v_genv}.{dec_func_name} = function(bytes, k, m)
         local t = {{}}
         for i = 1, #bytes do
-            local pos_k = (k + ((i - 1) * 7) + 11) % 256
-            local step1 = {v_bxor}(bytes[i], m)
-            t[i] = {v_char}({v_bxor}(step1, pos_k))
+            t[i] = string.char((bytes[i] ~= bit32 and bit32.bxor or bit.bxor)(bytes[i], m) ~= bit32 and bit32.bxor or bit.bxor((k + ((i - 1) * 7) + 11) % 256))
         end
-        return {v_concat}(t)
+        return table.concat(t)
     end
-"""
+""" if settings.get("string_enc", True) and is_outer else ""
 
-    watermark = settings.get("watermark", "").strip()
-    watermark_comment = f"--[[ {watermark} ]]\n" if watermark else "--[[ Protected by Classicfuscator Enterprise ]]--\n"
+    watermark_comment = f"--[[ {settings.get('watermark', '').strip() or 'Protected by Classicfuscator Enterprise'} ]]--\n"
 
-    lua_stub = f"""{watermark_comment}return (function(...)
+    return f"""{watermark_comment}return (function(...)
     local {v_genv} = (getgenv and getgenv()) or _ENV or _G
 {anti_hook_code}
     local {v_loader} = {v_genv}.loadstring or loadstring or load
-    if type({v_loader}) ~= "function" then
-        return
-    end
-
-    local {v_char} = string.char
-    local {v_concat} = table.concat
-
-    local function {v_bxor}(a, b)
-        if bit32 and bit32.bxor then return bit32.bxor(a, b) end
-        if bit and bit.bxor then return bit.bxor(a, b) end
+    if type({v_loader}) ~= "function" then return end
+    local Bx = bit32 and bit32.bxor or bit and bit.bxor or function(a, b)
         local p, r = 1, 0
         while a > 0 or b > 0 do
-            local ra, rb = a % 2, b % 2
-            if ra ~= rb then r = r + p end
+            if a % 2 ~= b % 2 then r = r + p end
             a, b, p = math.floor(a / 2), math.floor(b / 2), p * 2
         end
         return r
     end
-
-    local function {v_rol}(val, amt)
-        amt = amt % 8
-        local l = (val * (2 ^ amt)) % 256
-        local r = math.floor(val / (2 ^ (8 - amt)))
-        return (l + r) % 256
-    end
 {string_dec_block}
-    local {v_mult} = {k_mult}
-    local {v_inc} = {k_inc}
-    local {v_shift} = {k_shift}
-    local {v_mask} = {k_mask}
-
-    local {v_chunks} = {chunks_lua}
-    local {v_trans} = {trans_lua}
-    local {v_state} = {start_state}
-    local {v_out} = {{}}
-    local {v_idx} = 0
-
-    while {v_state} ~= 0 do
-        local chunk = {v_chunks}[{v_state}]
-        if not chunk then break end
-
-        for b_idx = 1, #chunk do
-            {v_seed} = ({v_seed} * {v_mult} + {v_inc} + {v_idx} * 13) % 256
-            local raw = chunk[b_idx]
-            local pos_key = ({v_idx} * 7 + 13) % 256
-
-            local step1 = {v_bxor}(raw, pos_key)
-            local step2 = {v_bxor}(step1, {v_mask})
-            local step3 = {v_bxor}(step2, {v_seed})
-            local unrotated = {v_rol}(step3, {v_shift})
-
-            {v_out}[#{v_out} + 1] = {v_char}(unrotated)
-            {v_idx} = {v_idx} + 1
+    local d, t, s, out, idx = {chunks_lua}, {trans_lua}, {chunk_states[0] if chunk_states else 0}, {{}}, 0
+    while s ~= 0 do
+        local c = d[s]
+        if not c then break end
+        for i = 1, #c do
+            {v_seed} = ({v_seed} * {k_mult} + {k_inc} + idx * 13) % 256
+            local raw, pos = c[i], (idx * 7 + 13) % 256
+            local step = Bx(Bx(Bx(raw, pos), {k_mask}), {v_seed})
+            local unrot = ((step * (2 ^ {k_shift})) % 256) + math.floor(step / (2 ^ (8 - {k_shift})))
+            out[#out + 1] = string.char(unrot % 256)
+            idx = idx + 1
         end
-
-        {v_state} = {v_trans}[{v_state}] or 0
+        s = t[s] or 0
     end
-
-    local payload_str = {v_concat}({v_out})
-    {v_out} = nil
-    {v_chunks} = nil
-    {v_trans} = nil
-
-    local {v_res}, {v_err} = {v_loader}(payload_str)
-    payload_str = nil
-
-    if type({v_res}) == "function" then
-        return {v_res}(...)
-    end
+    local f, err = {v_loader}(table.concat(out))
+    if type(f) == "function" then return f(...) end
 end)(...)"""
-
-    return lua_stub.strip()
-
 
 def obfuscate_pipeline(raw_code: str, settings: dict) -> str:
     v_dec = random_id("Dec")
     current_payload = ast_obfuscate(raw_code, v_dec, settings)
-    layers = max(1, min(5, int(settings.get("layers", 1))))
-    for layer_idx in range(layers):
-        is_outer = (layer_idx == 0)
-        current_payload = build_vm_layer(current_payload, v_dec, settings, is_outer)
+    for layer_idx in range(max(1, min(5, int(settings.get("layers", 1))))):
+        current_payload = build_vm_layer(current_payload, v_dec, settings, layer_idx == 0)
     return current_payload
 
 
 # ==============================================================================
-# 4. DEOBFUSCATOR ENGINE
+# 4. HIGH-TIER DEOBFUSCATOR ENGINE
 # ==============================================================================
 
-def deobfuscate_lua(lua_code: str) -> tuple[bool, str]:
-    """Applies heuristic deobfuscation passes to clean up obfuscated code."""
-    if not lua_code or not lua_code.strip():
-        return False, "Input code is empty."
+class HighTierDeobfuscator:
+    def __init__(self, code):
+        self.code = code
 
-    cleaned = lua_code
+    def safe_eval_math(self, expr):
+        """Safely evaluates math operations parsed from the AST."""
+        ops = {
+            ast.Add: operator.add, ast.Sub: operator.sub, 
+            ast.Mult: operator.mul, ast.Div: operator.truediv,
+            ast.Mod: operator.mod, ast.Pow: operator.pow,
+            ast.BitXor: operator.xor
+        }
+        
+        def _eval(node):
+            if isinstance(node, ast.Num):  # Python < 3.8
+                return node.n
+            elif isinstance(node, ast.Constant):  # Python >= 3.8
+                return node.value
+            elif isinstance(node, ast.BinOp):
+                left = _eval(node.left)
+                right = _eval(node.right)
+                return ops[type(node.op)](left, right)
+            elif isinstance(node, ast.UnaryOp):
+                operand = _eval(node.operand)
+                if isinstance(node.op, ast.USub): return -operand
+                elif isinstance(node.op, ast.UAdd): return +operand
+            raise ValueError("Unsupported node")
+            
+        return _eval(ast.parse(expr, mode='eval').body)
 
-    # Pass 1: Strip standard wrapper headers / watermarks
-    cleaned = re.sub(r"--\[\[.*?Protected by.*?\]\]", "", cleaned, flags=re.IGNORECASE | re.DOTALL)
-    cleaned = re.sub(r"--\[\[.*?\]\]", "", cleaned)
-
-    # Pass 2: Evaluate mathematical formula constants, e.g., ((val + offset) - offset)
-    def eval_math_sub(match):
-        expr = match.group(1)
-        try:
-            # Safely evaluate simple arithmetic expressions
-            if re.match(r"^[\d\s\+\-\*/\(\)\.]+$", expr):
-                res = eval(expr)
+    def unfold_math_constants(self):
+        """Evaluates obfuscated arithmetic constants back to numbers."""
+        pattern = re.compile(r'\(([\d\s\+\-\*/\(\)\.]+)\)')
+        
+        def replacer(match):
+            expr = match.group(1)
+            # Strict regex filter to prevent sandbox escapes during eval
+            if not re.match(r'^[\d\s\+\-\*/\(\)\.]+$', expr): return match.group(0)
+            if len(expr) > 150: return match.group(0) # Prevent DoS
+            
+            try:
+                res = self.safe_eval_math(expr)
                 if isinstance(res, float) and res.is_integer():
                     res = int(res)
                 return str(res)
-        except Exception:
-            pass
-        return match.group(0)
+            except Exception:
+                return match.group(0)
 
-    # Match inner patterns like ((123 + 456) - 456) or ((base / mult))
-    cleaned = re.sub(r"\((?:\(([\d\s\+\-\*/\(\)\.]+)\))\)", eval_math_sub, cleaned)
-    cleaned = re.sub(r"\(([\d\s\+\-\*/\(\)\.]+)\)", eval_math_sub, cleaned)
+        old_code = ""
+        while old_code != self.code:
+            old_code = self.code
+            self.code = pattern.sub(replacer, self.code)
 
-    # Pass 3: Simplify boolean/nil traps
-    cleaned = re.sub(r"\(\d+\s*==\s*\d+\)", lambda m: "true" if eval(m.group(0)) else "false", cleaned)
-    cleaned = re.sub(r"\(\{\[0\]\s*=\s*nil\}\[1\]\)", "nil", cleaned)
+    def unfold_logic_traps(self):
+        """Simplifies boolean expressions and nil traps."""
+        def bool_replacer(match):
+            try:
+                # E.g. "123 == 123" -> true
+                is_true = float(match.group(1)) == float(match.group(2))
+                return "true" if is_true else "false"
+            except Exception:
+                return match.group(0)
 
-    # Pass 4: Clean excessive empty lines and redundant whitespace
-    lines = [line.strip() for line in cleaned.splitlines()]
-    non_empty_lines = [line for line in lines if line]
-    cleaned = "\n".join(non_empty_lines)
+        self.code = re.sub(r'\(\s*(\d+(?:\.\d+)?)\s*==\s*(\d+(?:\.\d+)?)\s*\)', bool_replacer, self.code)
+        self.code = re.sub(r'\(\{\[0\]\s*=\s*nil\}\[1\]\)', "nil", self.code)
 
-    if not cleaned:
-        return False, "Deobfuscation resulted in empty output. Code may be fully compiled bytecode."
+    def decrypt_embedded_strings(self):
+        """Detects and statically decrypts strings generated by the obfuscator."""
+        # Find calls like Dec_Function({12, 34, 56}, 100, 200)
+        pattern = re.compile(r'[a-zA-Z_]\w*\(\s*\{([\d\s,]+)\}\s*,\s*(\d+)\s*,\s*(\d+)\s*\)')
+        
+        def replacer(match):
+            try:
+                bytes_str = match.group(1)
+                k = int(match.group(2))
+                m = int(match.group(3))
+                
+                byte_vals = [int(x.strip()) for x in bytes_str.split(',') if x.strip()]
+                decrypted = bytearray()
+                for i, b in enumerate(byte_vals):
+                    pos_k = (k + (i * 7) + 11) % 256
+                    step1 = b ^ m
+                    decrypted.append(step1 ^ pos_k)
+                
+                # Format to valid Lua string
+                decoded_str = decrypted.decode('utf-8', errors='ignore')
+                decoded_str = decoded_str.replace('\\', '\\\\').replace('"', '\\"').replace('\n', '\\n').replace('\r', '\\r')
+                return f'"{decoded_str}"'
+            except Exception:
+                return match.group(0)
+                
+        self.code = pattern.sub(replacer, self.code)
 
-    return True, cleaned
+    def inject_vm_hook(self):
+        """God-Tier feature: Injects trace logger into IronBrew/Luraph VMs."""
+        # Match standard IronBrew VM Loop: while true do cn=k[ck]; co=cn[bx];
+        ib_pattern = re.compile(r'(while\s+true\s+do\s+)([a-zA-Z_]\w*)\s*=\s*([a-zA-Z_]\w*)\[([a-zA-Z_]\w*)\]\s*;\s*([a-zA-Z_]\w*)\s*=\s*\2\[([a-zA-Z_]\w*)\]\s*;')
+        
+        def ib_hook(match):
+            prefix = match.group(1)
+            cn = match.group(2)
+            k = match.group(3)
+            ck = match.group(4)
+            co = match.group(5)
+            bx = match.group(6)
+            
+            hook_code = f"""{prefix} {cn}={k}[{ck}]; {co}={cn}[{bx}];
+    pcall(function()
+        if not _G._PC_TRACE then _G._PC_TRACE = {{}} end
+        local op = tostring({co})
+        local A = tostring({cn}[2] or "nil")
+        local B = tostring({cn}[3] or "nil")
+        local C = tostring({cn}[4] or "nil")
+        local trace_str = "[VM HOOK] PC: " .. tostring({ck}) .. " | OP: " .. op .. " | A: " .. A .. " | B: " .. B .. " | C: " .. C
+        print(trace_str)
+        table.insert(_G._PC_TRACE, trace_str)
+    end);
+"""
+            return hook_code
+        
+        self.code = ib_pattern.sub(ib_hook, self.code)
+
+    def format_lexical_scope(self):
+        """Beautifies 1-liner obfuscated code into properly indented blocks."""
+        # Initial line splitting heuristics
+        cleaned = re.sub(r'\b(then|do|repeat)\b', r'\1\n', self.code)
+        cleaned = re.sub(r';', r';\n', cleaned)
+        cleaned = re.sub(r'\b(end|until|elseif|else)\b', r'\n\1', cleaned)
+        
+        lines = [line.strip() for line in cleaned.splitlines() if line.strip()]
+        out = []
+        indent = 0
+        
+        for line in lines:
+            # Dedent triggers
+            if line.startswith("end") or line.startswith("until") or line.startswith("elseif") or line.startswith("else"):
+                indent = max(0, indent - 1)
+                
+            out.append(("    " * indent) + line)
+            
+            # Indent triggers
+            inc = len(re.findall(r'\b(do|then|repeat|function)\b', line))
+            dec = len(re.findall(r'\b(end|until)\b', line))
+            
+            # Handle inline 'function() ... end' to avoid over-indenting
+            indent += (inc - dec)
+            indent = max(0, indent)
+            
+        self.code = "\n".join(out)
+
+    def run(self):
+        """Executes all deobfuscation passes."""
+        # 1. Strip Watermarks
+        self.code = re.sub(r"--\[\[.*?Protected by.*?\]\]", "", self.code, flags=re.IGNORECASE | re.DOTALL)
+        self.code = re.sub(r"--\[\[.*?\]\]", "", self.code)
+        
+        # 2. Deflatten / Unfold
+        self.unfold_math_constants()
+        self.unfold_logic_traps()
+        self.decrypt_embedded_strings()
+        
+        # 3. Dynamic Prep
+        self.inject_vm_hook()
+        
+        # 4. Beautify
+        self.format_lexical_scope()
+        
+        if not self.code.strip():
+            return False, "Deobfuscation resulted in empty output. Code may be fully compiled bytecode."
+            
+        return True, self.code
+
+def deobfuscate_lua(lua_code: str) -> tuple[bool, str]:
+    deobfuscator = HighTierDeobfuscator(lua_code)
+    return deobfuscator.run()
 
 
 # ==============================================================================
@@ -591,7 +544,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             border-radius: 20px; 
             box-shadow: 0 4px 20px rgba(0, 0, 0, 0.03); 
             width: 100%; 
-            max-width: 580px; 
+            max-width: 650px; 
             padding: 36px 32px; 
             border: 1px solid #eef0f4; 
         }
@@ -714,7 +667,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
         }
         .loader-text {
             width: 100%;
-            height: 120px;
+            height: 250px;
             background: #ffffff;
             border: 1px solid #dcdfe6;
             border-radius: 8px;
@@ -788,7 +741,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
 
         <div class="tab-nav">
             <button class="tab-btn active" onclick="switchTab('obfuscatorTab', this)">1. Obfuscator</button>
-            <button class="tab-btn" onclick="switchTab('deobfuscatorTab', this)">2. Deobfuscator</button>
+            <button class="tab-btn" onclick="switchTab('deobfuscatorTab', this)">2. High-Tier Deobfuscator</button>
             <button class="tab-btn" onclick="switchTab('settingsTab', this)">3. Settings</button>
         </div>
 
@@ -823,13 +776,13 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             </div>
 
             <div class="or-text">Or paste obfuscated Lua script here:</div>
-            <textarea id="deobInput" placeholder="-- Paste obfuscated Lua code here..."></textarea>
+            <textarea id="deobInput" placeholder="-- Paste IronBrew / Luraph / Custom obfuscated Lua code here..."></textarea>
 
-            <button class="btn" id="deobSubmitBtn" style="background-color: #0f172a;" onclick="deobfuscateCode()">Start Deobfuscation</button>
+            <button class="btn" id="deobSubmitBtn" style="background-color: #0f172a;" onclick="deobfuscateCode()">Start High-Tier Deobfuscation</button>
 
             <div class="output-container" id="deobOutputWrapper" style="display: block;">
                 <div class="loader-box">
-                    <span class="section-label">Cleaned / Deobfuscated Output:</span>
+                    <span class="section-label">Cleaned / Devirtualized Output:</span>
                     <textarea id="deobLoaderOutput" class="loader-text" placeholder="Deobfuscated code results will appear here..." readonly></textarea>
                     <button class="btn" id="copyDeobBtn" style="background-color: #334155; color: #ffffff; box-shadow: none; margin-top: 10px;" onclick="copyDeobOutput()">Copy Cleaned Code</button>
                 </div>
@@ -1037,7 +990,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             } catch (err) {
                 loaderArea.value = "-- Network error: Could not connect to server.";
             } finally {
-                submitBtn.innerText = "Start Deobfuscation";
+                submitBtn.innerText = "Start High-Tier Deobfuscation";
             }
         }
 
@@ -1086,11 +1039,9 @@ PROTECTED_HTML_TEMPLATE = """<!DOCTYPE html>
 </html>
 """
 
-
 @app.route("/", methods=["GET"])
 def index():
     return render_template_string(HTML_TEMPLATE)
-
 
 @app.route("/obfuscate", methods=["POST"])
 def process():
@@ -1099,38 +1050,24 @@ def process():
     settings = data.get("settings", {})
     
     if not raw_code or not raw_code.strip():
-        return jsonify({
-            "success": False,
-            "error": "Error: Input script cannot be empty."
-        }), 400
+        return jsonify({"success": False, "error": "Error: Input script cannot be empty."}), 400
 
     is_valid, error_message = validate_lua_syntax(raw_code)
     if not is_valid:
-        return jsonify({
-            "success": False,
-            "error": f"Syntax Error: {error_message}"
-        }), 400
+        return jsonify({"success": False, "error": f"Syntax Error: {error_message}"}), 400
     
     token = uuid.uuid4().hex
     obfuscated_code = obfuscate_pipeline(raw_code, settings)
     
-    SCRIPT_CACHE[token] = {
-        "code": obfuscated_code,
-        "created_at": time.time(),
-        "active": True
-    }
+    SCRIPT_CACHE[token] = {"code": obfuscated_code, "created_at": time.time(), "active": True}
     
     file_path = os.path.join(SAVED_DIR, f"{token}.lua")
-    with open(file_path, "w", encoding="utf-8") as f:
-        f.write(obfuscated_code)
+    with open(file_path, "w", encoding="utf-8") as f: f.write(obfuscated_code)
 
     try:
         conn = sqlite3.connect(DB_PATH)
         c = conn.cursor()
-        c.execute(
-            "INSERT OR REPLACE INTO scripts (token, code, created_at) VALUES (?, ?, ?)",
-            (token, obfuscated_code, time.time()),
-        )
+        c.execute("INSERT OR REPLACE INTO scripts (token, code, created_at) VALUES (?, ?, ?)", (token, obfuscated_code, time.time()))
         conn.commit()
         conn.close()
     except Exception as e:
@@ -1145,12 +1082,7 @@ def process():
 
     loader_script = f'loadstring(game:HttpGet("{domain_url}/raw/{token}"))()'
 
-    return jsonify({
-        "success": True,
-        "loader": loader_script,
-        "token": token
-    })
-
+    return jsonify({"success": True, "loader": loader_script, "token": token})
 
 @app.route("/deobfuscate", methods=["POST"])
 def deobfuscate_endpoint():
@@ -1158,37 +1090,23 @@ def deobfuscate_endpoint():
     raw_code = data.get("code", "")
     
     if not raw_code or not raw_code.strip():
-        return jsonify({
-            "success": False,
-            "error": "Error: Input script cannot be empty."
-        }), 400
+        return jsonify({"success": False, "error": "Error: Input script cannot be empty."}), 400
 
     success, result = deobfuscate_lua(raw_code)
     if not success:
-        return jsonify({
-            "success": False,
-            "error": result
-        }), 400
+        return jsonify({"success": False, "error": result}), 400
 
-    return jsonify({
-        "success": True,
-        "code": result
-    })
-
+    return jsonify({"success": True, "code": result})
 
 @app.route("/raw/<token>", methods=["GET"])
 def serve_script(token):
     sec_fetch_dest = request.headers.get("Sec-Fetch-Dest", "").lower()
     sec_ch_ua = request.headers.get("Sec-Ch-Ua")
 
-    is_human_browser = (sec_fetch_dest == "document" and bool(sec_ch_ua))
-    if is_human_browser:
+    if sec_fetch_dest == "document" and bool(sec_ch_ua):
         return render_template_string(PROTECTED_HTML_TEMPLATE)
 
-    code = None
-
-    if token in SCRIPT_CACHE:
-        code = SCRIPT_CACHE[token]["code"]
+    code = SCRIPT_CACHE.get(token, {}).get("code")
 
     if not code:
         try:
@@ -1200,14 +1118,12 @@ def serve_script(token):
                 code = row[0]
                 SCRIPT_CACHE[token] = {"code": code, "created_at": time.time(), "active": True}
             conn.close()
-        except Exception as e:
-            print("DB Read Error:", e)
+        except Exception as e: print("DB Read Error:", e)
 
     if not code:
         file_path = os.path.join(SAVED_DIR, f"{token}.lua")
         if os.path.exists(file_path):
-            with open(file_path, "r", encoding="utf-8") as f:
-                code = f.read()
+            with open(file_path, "r", encoding="utf-8") as f: code = f.read()
 
     if code:
         res = Response(code, mimetype="text/plain")
@@ -1216,7 +1132,6 @@ def serve_script(token):
         return res
 
     return Response("warn('[Classicfuscator] Script token expired or not found.')", status=200, mimetype="text/plain")
-
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
