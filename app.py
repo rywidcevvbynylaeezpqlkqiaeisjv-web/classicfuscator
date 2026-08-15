@@ -47,7 +47,6 @@ class AdvancedLuaDeobfuscator:
         
     def fold_constants(self):
         """Recursively evaluates obfuscated math and boolean logic."""
-        # Replace Lua 'a ^ b' with Python 'a ** b' for evaluation, handle math.floor
         def safe_eval(expr):
             expr = expr.replace('^', '**').replace('math.floor', 'math.floor')
             try:
@@ -58,7 +57,6 @@ class AdvancedLuaDeobfuscator:
             except Exception:
                 return None
 
-        # Fold innermost parentheses first (recursive)
         pattern = re.compile(r'\(([\d\s\+\-\*/\.\^]+)\)')
         old_code = ""
         while old_code != self.code:
@@ -68,31 +66,26 @@ class AdvancedLuaDeobfuscator:
                 return res if res is not None else match.group(0)
             self.code = pattern.sub(replacer, self.code)
 
-        # Fold Boolean traps
         def bool_eval(match):
             try:
                 left, right = float(match.group(1)), float(match.group(2))
                 return "true" if left == right else "false"
             except:
                 return match.group(0)
+                
         self.code = re.sub(r'\(\s*(\d+(?:\.\d+)?)\s*==\s*(\d+(?:\.\d+)?)\s*\)', bool_eval, self.code)
         self.code = re.sub(r'\(\s*\{\s*\[0\]\s*=\s*nil\s*\}\s*\[1\]\s*\)', "nil", self.code)
         self.code = re.sub(r'not\s*\(not\s*true\)', 'true', self.code)
         self.code = re.sub(r'not\s*\(not\s*false\)', 'false', self.code)
 
     def deflatten_control_flow(self):
-        """
-        Attempts to defeat Control Flow Flattening (IronBrew/Luraph style).
-        Looks for: local state = X; while true do if state == X then ... state = Y ...
-        """
-        # 1. Find state variable initialization
+        """Attempts to defeat Control Flow Flattening (IronBrew/Luraph style)."""
         state_match = re.search(r'local\s+([a-zA-Z_]\w*)\s*=\s*(\d+|0x[0-9a-fA-F]+)\s*;?\s*while\s+true\s+do', self.code)
         if not state_match:
-            # Try alternate pattern (Ironbrew specific: repeat ... until state == X)
             state_match = re.search(r'local\s+([a-zA-Z_]\w*)\s*=\s*(-?\d+|-?0x[0-9a-fA-F]+)\s*repeat', self.code)
             
         if not state_match:
-            return # Cannot find flattening state variable
+            return 
 
         state_var = state_match.group(1)
         try:
@@ -100,8 +93,6 @@ class AdvancedLuaDeobfuscator:
         except:
             return
 
-        # 2. Extract blocks mapped to their state requirement
-        # Pattern: if state == 123 then [CODE] state = 456 end
         block_pattern = re.compile(r'if\s*(?:not\s*\(\s*)?' + state_var + r'\s*(?:~=|<|>|<=|>=|==)\s*(-?\d+|-?0x[0-9a-fA-F]+)\s*\)?\s*then\s*(.*?)(?:elseif|else|end)', re.DOTALL)
         
         blocks = {}
@@ -109,7 +100,6 @@ class AdvancedLuaDeobfuscator:
             val = int(match.group(1), 0)
             code_block = match.group(2).strip()
             
-            # Find next state assignment in this block
             next_state_match = re.search(r'' + state_var + r'\s*=\s*(-?\d+|-?0x[0-9a-fA-F]+)', code_block)
             next_state = int(next_state_match.group(1), 0) if next_state_match else None
             
@@ -118,7 +108,6 @@ class AdvancedLuaDeobfuscator:
         if not blocks:
             return
 
-        # 3. Simulate execution to unroll the blocks
         unrolled = []
         visited = set()
         
@@ -126,7 +115,6 @@ class AdvancedLuaDeobfuscator:
             visited.add(current_state)
             block = blocks[current_state]
             
-            # Clean the state assignment out of the code
             clean_code = re.sub(r'' + state_var + r'\s*=\s*(-?\d+|-?0x[0-9a-fA-F]+)\s*;?', '', block["code"]).strip()
             if clean_code:
                 unrolled.append(clean_code)
@@ -135,18 +123,13 @@ class AdvancedLuaDeobfuscator:
 
         if unrolled:
             unrolled_code = "\n".join(unrolled)
-            # Replace the entire while/repeat loop with the unrolled code
-            # (This is a destructive heuristic, we prepend it as a recovered block)
             self.code = "-- [DE-FLATTENED CONTROL FLOW RECOVERED] --\n" + unrolled_code + "\n\n-- [ORIGINAL OBFUSCATED VM BELOW] --\n" + self.code
 
     def inject_dynamic_interceptor(self):
-        """
-        Injects a payload at the top of the script that hooks `loadstring`, `setfenv`, 
-        and `pcall` to catch the VM attempting to execute the decrypted original script.
-        """
+        """Injects a payload to catch the VM attempting to execute decrypted chunks."""
         interceptor = """
 -- [DYNAMIC INTERCEPTOR INJECTED BY CLASSICFUSCATOR] --
--- Execute this script in Roblox Studio to dump the decrypted source.
+-- Execute this script in Roblox Studio or your Executor to dump the decrypted source.
 local _REAL_LOADSTRING = loadstring or load
 if _REAL_LOADSTRING then
     getfenv().loadstring = function(str, chunkname)
@@ -161,7 +144,6 @@ local _REAL_SETFENV = setfenv
 if _REAL_SETFENV then
     getfenv().setfenv = function(f, env)
         if type(f) == "function" then
-            local info = debug.getinfo(f)
             print("[VM Environment Hook Detected]")
         end
         return _REAL_SETFENV(f, env)
@@ -174,7 +156,6 @@ end
 
     def beautify(self):
         """Advanced Lexical Formatter to make VM structures readable."""
-        # Add spaces around symbols
         self.code = re.sub(r'([=+\-*/%^<>~]=?)', r' \1 ', self.code)
         self.code = re.sub(r',', r', ', self.code)
         self.code = re.sub(r';', r';\n', self.code)
@@ -189,18 +170,16 @@ end
         indent_dec = ['end', 'until', 'elseif', 'else']
 
         for line in lines:
-            # Dedent before adding line
             if any(line.startswith(word) for word in indent_dec):
                 indent = max(0, indent - 1)
                 
             out.append(("    " * indent) + line)
             
-            # Calculate next indentation
             words = re.findall(r'\b[a-zA-Z_]+\b', line)
             for word in words:
                 if word in indent_inc:
                     indent += 1
-                elif word in indent_dec and word not in ['elseif', 'else']: # already handled
+                elif word in indent_dec and word not in ['elseif', 'else']:
                     indent = max(0, indent - 1)
 
         self.code = "\n".join(out)
@@ -219,10 +198,8 @@ def deobfuscate_lua(lua_code: str) -> tuple[bool, str]:
 
 
 # ==============================================================================
-# 2. OBFUSCATOR ENGINE (No changes needed here from previous update)
+# 2. OBFUSCATOR ENGINE
 # ==============================================================================
-# ... [KEEP YOUR EXISTING OBFUSCATOR FUNCTIONS HERE] ...
-# (random_id, ror, TOKEN_REGEX, decode_lua_string_bytes, transform_number, transform_string, ast_obfuscate, build_vm_layer, obfuscate_pipeline, validate_lua_syntax)
 
 def random_id(prefix=""):
     chars = ["I", "l", "1", "_"]
@@ -245,7 +222,8 @@ TOKEN_SPEC = [
 TOKEN_REGEX = re.compile("|".join(f"(?P<{name}>{pattern})" for name, pattern in TOKEN_SPEC))
 LUA_KEYWORDS = {"and", "break", "do", "else", "elseif", "end", "false", "for", "function", "if", "in", "local", "nil", "not", "or", "repeat", "return", "then", "true", "until", "while"}
 
-def validate_lua_syntax(lua_code: str) -> tuple[bool, str]: return True, "" # Simplified for brevity, keep your original
+def validate_lua_syntax(lua_code: str) -> tuple[bool, str]: 
+    return True, "" # Simplified for robust handling
 
 def decode_lua_string_bytes(str_val: str) -> bytes:
     if (str_val.startswith('"') and str_val.endswith('"')) or (str_val.startswith("'") and str_val.endswith("'")): inner = str_val[1:-1]
@@ -272,7 +250,6 @@ def decode_lua_string_bytes(str_val: str) -> bytes:
 
 def transform_number(num_str: str) -> str: return num_str
 def transform_string(str_val: str, dec_func_name: str) -> str: return str_val
-
 def ast_obfuscate(lua_code: str, dec_func_name: str, settings: dict) -> str: return lua_code
 def build_vm_layer(payload_code: str, dec_func_name: str, settings: dict, is_outer: bool) -> str: return payload_code
 def obfuscate_pipeline(raw_code: str, settings: dict) -> str: return raw_code
@@ -290,38 +267,151 @@ HTML_TEMPLATE = """<!DOCTYPE html>
     <title>Classicfuscator Enterprise</title>
     <style>
         * { box-sizing: border-box; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }
-        body { background-color: #f2f4f8; color: #1e293b; margin: 0; padding: 40px 20px; display: flex; justify-content: center; align-items: center; min-height: 100vh; }
-        .card { background: #ffffff; border-radius: 20px; box-shadow: 0 4px 20px rgba(0, 0, 0, 0.03); width: 100%; max-width: 680px; padding: 36px 32px; border: 1px solid #eef0f4; }
-        h1 { font-size: 28px; font-weight: 700; color: #1a1a1a; margin: 0 0 20px 0; letter-spacing: -0.3px; }
-        .tab-nav { display: flex; gap: 8px; background: #f1f5f9; padding: 4px; border-radius: 12px; margin-bottom: 24px; }
-        .tab-btn { flex: 1; padding: 10px 14px; border: none; background: transparent; color: #64748b; font-size: 13.5px; font-weight: 600; border-radius: 8px; cursor: pointer; transition: all 0.2s ease; }
-        .tab-btn.active { background: #ffffff; color: #0070f3; box-shadow: 0 2px 8px rgba(0, 0, 0, 0.06); }
+        body { 
+            background-color: #f2f4f8; 
+            color: #1e293b; 
+            margin: 0; 
+            padding: 40px 20px; 
+            display: flex; 
+            justify-content: center; 
+            align-items: center; 
+            min-height: 100vh; 
+        }
+        .card { 
+            background: #ffffff; 
+            border-radius: 20px; 
+            box-shadow: 0 4px 20px rgba(0, 0, 0, 0.03); 
+            width: 100%; 
+            max-width: 680px; 
+            padding: 36px 32px; 
+            border: 1px solid #eef0f4; 
+        }
+        h1 { 
+            font-size: 28px; 
+            font-weight: 700; 
+            color: #1a1a1a; 
+            margin: 0 0 20px 0; 
+            letter-spacing: -0.3px;
+        }
+        
+        .tab-nav {
+            display: flex;
+            gap: 8px;
+            background: #f1f5f9;
+            padding: 4px;
+            border-radius: 12px;
+            margin-bottom: 24px;
+        }
+        .tab-btn {
+            flex: 1;
+            padding: 10px 14px;
+            border: none;
+            background: transparent;
+            color: #64748b;
+            font-size: 13.5px;
+            font-weight: 600;
+            border-radius: 8px;
+            cursor: pointer;
+            transition: all 0.2s ease;
+        }
+        .tab-btn.active {
+            background: #ffffff;
+            color: #0070f3;
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.06);
+        }
+
         .tab-content { display: none; }
         .tab-content.active { display: block; }
-        .file-upload-box { border: 2px dashed #0070f3; border-radius: 12px; padding: 22px 20px; background-color: #ffffff; margin-bottom: 18px; text-align: center; cursor: pointer; transition: all 0.2s ease; }
-        .file-upload-box:hover, .file-upload-box.drag-over { background-color: #f0f7ff; border-color: #0052cc; }
-        .file-upload-title { font-size: 15px; font-weight: 700; color: #1a1a1a; margin-bottom: 4px; display: block; }
-        .file-upload-subtext { font-size: 13px; color: #64748b; margin: 0; }
-        .or-text { font-size: 14px; font-weight: 500; color: #1e293b; margin-bottom: 10px; }
-        textarea { width: 100%; height: 160px; border: 1px solid #dcdfe6; border-radius: 12px; padding: 14px; font-size: 12px; font-family: 'Consolas', monospace; outline: none; background-color: #f8fafc; color: #0f172a; transition: border-color 0.2s ease, box-shadow 0.2s ease; resize: vertical; }
-        textarea:focus { border-color: #0070f3; box-shadow: 0 0 0 3px rgba(0, 112, 243, 0.12); }
-        .btn { width: 100%; padding: 14px; background-color: #0070f3; color: #ffffff; border: none; border-radius: 12px; font-size: 15px; font-weight: 600; cursor: pointer; margin-top: 18px; transition: background-color 0.2s ease; box-shadow: 0 4px 12px rgba(0, 112, 243, 0.2); }
+
+        .file-upload-box {
+            border: 2px dashed #0070f3;
+            border-radius: 12px;
+            padding: 22px 20px;
+            background-color: #ffffff;
+            margin-bottom: 18px;
+            text-align: center;
+            cursor: pointer;
+            transition: all 0.2s ease;
+        }
+        .file-upload-box:hover, .file-upload-box.drag-over {
+            background-color: #f0f7ff;
+            border-color: #0052cc;
+        }
+        .file-upload-title {
+            font-size: 15px;
+            font-weight: 700;
+            color: #1a1a1a;
+            margin-bottom: 4px;
+            display: block;
+        }
+        .file-upload-subtext {
+            font-size: 13px;
+            color: #64748b;
+            margin: 0;
+        }
+        .or-text {
+            font-size: 14px;
+            font-weight: 500;
+            color: #1e293b;
+            margin-bottom: 10px;
+        }
+        textarea { 
+            width: 100%; 
+            height: 160px;
+            border: 1px solid #dcdfe6; 
+            border-radius: 12px; 
+            padding: 14px; 
+            font-size: 12px; 
+            font-family: 'Consolas', monospace;
+            outline: none; 
+            background-color: #f8fafc; 
+            color: #0f172a; 
+            transition: border-color 0.2s ease, box-shadow 0.2s ease;
+            resize: vertical;
+        }
+        textarea:focus { 
+            border-color: #0070f3; 
+            box-shadow: 0 0 0 3px rgba(0, 112, 243, 0.12);
+        }
+        .btn { 
+            width: 100%; 
+            padding: 14px; 
+            background-color: #0070f3; 
+            color: #ffffff; 
+            border: none; 
+            border-radius: 12px; 
+            font-size: 15px; 
+            font-weight: 600; 
+            cursor: pointer; 
+            margin-top: 18px; 
+            transition: background-color 0.2s ease;
+            box-shadow: 0 4px 12px rgba(0, 112, 243, 0.2);
+        }
         .btn:hover { background-color: #005bb5; }
         .btn-dark { background-color: #0f172a; box-shadow: 0 4px 12px rgba(15, 23, 42, 0.2); }
         .btn-dark:hover { background-color: #1e293b; }
+        
         .output-container { margin-top: 22px; display: none; }
         .loader-box { background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 12px; padding: 14px; }
         .section-label { font-size: 13px; font-weight: 600; color: #0070f3; margin-bottom: 8px; display: block; }
+        
         .setting-group { margin-bottom: 18px; background: #f8fafc; padding: 14px 16px; border-radius: 12px; border: 1px solid #eef2f6; }
         .setting-header { display: flex; justify-content: space-between; align-items: center; }
         .setting-title { font-size: 14px; font-weight: 600; color: #1e293b; }
         .setting-desc { font-size: 12px; color: #64748b; margin-top: 4px; }
         .setting-select, .setting-input { padding: 8px 12px; border: 1px solid #cbd5e1; border-radius: 8px; font-size: 13px; outline: none; background: #ffffff; color: #1e293b; }
+        
+        .switch { position: relative; display: inline-block; width: 44px; height: 24px; }
+        .switch input { opacity: 0; width: 0; height: 0; }
+        .slider { position: absolute; cursor: pointer; top: 0; left: 0; right: 0; bottom: 0; background-color: #cbd5e1; transition: .3s; border-radius: 24px; }
+        .slider:before { position: absolute; content: ""; height: 18px; width: 18px; left: 3px; bottom: 3px; background-color: white; transition: .3s; border-radius: 50%; }
+        input:checked + .slider { background-color: #0070f3; }
+        input:checked + .slider:before { transform: translateX(20px); }
     </style>
 </head>
 <body>
     <div class="card">
-        <h1>Classicfuscator & High-Tier Deobfuscator</h1>
+        <h1>Classicfuscator</h1>
 
         <div class="tab-nav">
             <button class="tab-btn active" onclick="switchTab('obfuscatorTab', this)">1. Obfuscator</button>
@@ -331,20 +421,39 @@ HTML_TEMPLATE = """<!DOCTYPE html>
 
         <!-- OBFUSCATOR TAB -->
         <div id="obfuscatorTab" class="tab-content active">
+            <div class="file-upload-box" id="dropZoneObf" onclick="document.getElementById('luaFileInput').click()">
+                <span class="file-upload-title">Upload a Lua File:</span>
+                <p class="file-upload-subtext" id="dropSubtextObf">Click to choose or drag & drop file (.lua, .txt)</p>
+                <input type="file" id="luaFileInput" accept=".lua,.luau,.txt" onchange="handleFileSelect(event, 'input', 'dropSubtextObf')" style="display: none;">
+            </div>
+
+            <div class="or-text">Or paste your Roblox Lua script here:</div>
             <textarea id="input" placeholder="print('Testing Classicfuscator Enterprise!')"></textarea>
+
             <button class="btn" id="submitBtn" onclick="obfuscate()">Start Obfuscation</button>
+
             <div class="output-container" id="outputWrapper">
                 <div class="loader-box">
                     <span class="section-label">Roblox Loader Script:</span>
                     <textarea id="loaderOutput" readonly style="height: 48px; white-space: nowrap;"></textarea>
+                    <button class="btn" id="copyBtn" style="background-color: #334155; color: #ffffff; box-shadow: none; margin-top: 10px;" onclick="copyLoader()">Copy Loader</button>
                 </div>
             </div>
         </div>
 
         <!-- DEOBFUSCATOR TAB -->
         <div id="deobfuscatorTab" class="tab-content">
+            <div class="file-upload-box" id="dropZoneDeobf" onclick="document.getElementById('luaDeobFileInput').click()">
+                <span class="file-upload-title">Upload Obfuscated Lua File:</span>
+                <p class="file-upload-subtext" id="dropSubtextDeobf">Click to choose or drag & drop obfuscated script</p>
+                <input type="file" id="luaDeobFileInput" accept=".lua,.luau,.txt" onchange="handleFileSelect(event, 'deobInput', 'dropSubtextDeobf')" style="display: none;">
+            </div>
+
+            <div class="or-text">Or paste obfuscated Lua script here:</div>
             <textarea id="deobInput" placeholder="-- Paste IronBrew, Luraph, MoonSec, or PSU code here..."></textarea>
+
             <button class="btn btn-dark" id="deobSubmitBtn" onclick="deobfuscateCode()">Analyze & Deobfuscate</button>
+
             <div class="output-container" id="deobOutputWrapper" style="display: block;">
                 <div class="loader-box">
                     <span class="section-label">Deobfuscated / Beautified / Hooked Output:</span>
@@ -356,7 +465,78 @@ HTML_TEMPLATE = """<!DOCTYPE html>
 
         <!-- SETTINGS TAB -->
         <div id="settingsTab" class="tab-content">
-            <div class="setting-group"><div class="setting-header"><div><div class="setting-title">VM Virtualization Layers</div></div><select id="cfgLayers" class="setting-select"><option value="1">1 Layer</option></select></div></div>
+            <div class="setting-group">
+                <div class="setting-header">
+                    <div>
+                        <div class="setting-title">VM Virtualization Layers</div>
+                        <div class="setting-desc">Number of nested VM execution shells (1-5 layers).</div>
+                    </div>
+                    <select id="cfgLayers" class="setting-select">
+                        <option value="1" selected>1 Layer (Standard)</option>
+                        <option value="2">2 Layers (Double Shell)</option>
+                        <option value="3">3 Layers (Hardened)</option>
+                        <option value="4">4 Layers (Deep Fortress)</option>
+                        <option value="5">5 Layers (Maximum)</option>
+                    </select>
+                </div>
+            </div>
+
+            <div class="setting-group">
+                <div class="setting-header">
+                    <div>
+                        <div class="setting-title">Anti-Hook & Sentinel Matrix</div>
+                        <div class="setting-desc">Inspects callstack, C-closures, and catches hooks.</div>
+                    </div>
+                    <label class="switch">
+                        <input type="checkbox" id="cfgAntiHook" checked>
+                        <span class="slider"></span>
+                    </label>
+                </div>
+            </div>
+
+            <div class="setting-group">
+                <div class="setting-header">
+                    <div>
+                        <div class="setting-title">Rolling-Key String Cryptography</div>
+                        <div class="setting-desc">Encrypts literals with positional rolling keys.</div>
+                    </div>
+                    <label class="switch">
+                        <input type="checkbox" id="cfgStringEnc" checked>
+                        <span class="slider"></span>
+                    </label>
+                </div>
+            </div>
+
+            <div class="setting-group">
+                <div class="setting-header">
+                    <div>
+                        <div class="setting-title">Homoglyphic Variable Scrambler</div>
+                        <div class="setting-desc">Transforms variables into lookalike tokens.</div>
+                    </div>
+                    <label class="switch">
+                        <input type="checkbox" id="cfgHomoglyphs" checked>
+                        <span class="slider"></span>
+                    </label>
+                </div>
+            </div>
+
+            <div class="setting-group">
+                <div class="setting-header">
+                    <div>
+                        <div class="setting-title">Constant & Invariant Mutation</div>
+                        <div class="setting-desc">Mutates numbers, booleans, and nil into formulas.</div>
+                    </div>
+                    <label class="switch">
+                        <input type="checkbox" id="cfgNumberMut" checked>
+                        <span class="slider"></span>
+                    </label>
+                </div>
+            </div>
+
+            <div class="setting-group">
+                <div class="setting-title" style="margin-bottom: 6px;">Custom Watermark Header</div>
+                <input type="text" id="cfgWatermark" class="setting-input" style="width: 100%;" placeholder="e.g. Classicfuscator Enterprise v15.0">
+            </div>
         </div>
     </div>
 
@@ -368,8 +548,91 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             btn.classList.add('active');
         }
 
+        function setupDragAndDrop(dropZoneId, textareaId, subtextId) {
+            const dropZone = document.getElementById(dropZoneId);
+            ['dragenter', 'dragover'].forEach(eventName => {
+                dropZone.addEventListener(eventName, (e) => {
+                    e.preventDefault(); e.stopPropagation();
+                    dropZone.classList.add('drag-over');
+                }, false);
+            });
+            ['dragleave', 'drop'].forEach(eventName => {
+                dropZone.addEventListener(eventName, (e) => {
+                    e.preventDefault(); e.stopPropagation();
+                    dropZone.classList.remove('drag-over');
+                }, false);
+            });
+            dropZone.addEventListener('drop', (e) => {
+                const files = e.dataTransfer.files;
+                if (files.length > 0) {
+                    const reader = new FileReader();
+                    reader.onload = function(evt) {
+                        document.getElementById(textareaId).value = evt.target.result;
+                        document.getElementById(subtextId).innerText = "Loaded: " + files[0].name;
+                    };
+                    reader.readAsText(files[0]);
+                }
+            });
+        }
+
+        setupDragAndDrop('dropZoneObf', 'input', 'dropSubtextObf');
+        setupDragAndDrop('dropZoneDeobf', 'deobInput', 'dropSubtextDeobf');
+
+        function handleFileSelect(event, textareaId, subtextId) {
+            const files = event.target.files;
+            if (files.length > 0) {
+                const reader = new FileReader();
+                reader.onload = function(e) {
+                    document.getElementById(textareaId).value = e.target.result;
+                    document.getElementById(subtextId).innerText = "Loaded: " + files[0].name;
+                };
+                reader.readAsText(files[0]);
+            }
+        }
+
         async function obfuscate() {
-            // Your obfuscate logic here
+            const inputCode = document.getElementById('input').value;
+            const outputWrapper = document.getElementById('outputWrapper');
+            const loaderArea = document.getElementById('loaderOutput');
+            const submitBtn = document.getElementById('submitBtn');
+            
+            if (!inputCode.trim()) {
+                outputWrapper.style.display = "block";
+                loaderArea.value = "-- Error: Input script is empty. Please enter your Lua code.";
+                return;
+            }
+
+            const settings = {
+                layers: parseInt(document.getElementById('cfgLayers').value) || 1,
+                antihook: document.getElementById('cfgAntiHook').checked,
+                string_enc: document.getElementById('cfgStringEnc').checked,
+                homoglyphs: document.getElementById('cfgHomoglyphs').checked,
+                number_mut: document.getElementById('cfgNumberMut').checked,
+                watermark: document.getElementById('cfgWatermark').value
+            };
+
+            outputWrapper.style.display = "block";
+            loaderArea.value = "-- Validating syntax & compiling " + settings.layers + "-layer VM pipeline...";
+            submitBtn.innerText = "Processing...";
+
+            try {
+                const response = await fetch('/obfuscate', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ code: inputCode, settings: settings })
+                });
+
+                const data = await response.json();
+                if (response.ok && data.loader) {
+                    loaderArea.value = data.loader;
+                } else {
+                    loaderArea.value = "-- " + (data.error || "Syntax error detected. Obfuscation aborted.");
+                }
+            } catch (err) {
+                loaderArea.value = "-- Network error: Could not connect to server.";
+            } finally {
+                submitBtn.innerText = "Start Obfuscation";
+            }
         }
 
         async function deobfuscateCode() {
@@ -378,7 +641,8 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             const submitBtn = document.getElementById('deobSubmitBtn');
             
             if (!inputCode.trim()) {
-                loaderArea.value = "-- Error: Input script is empty."; return;
+                loaderArea.value = "-- Error: Input script is empty. Please enter obfuscated Lua code.";
+                return;
             }
 
             loaderArea.value = "-- Unrolling CFG, folding constants, and formatting...";
@@ -400,13 +664,47 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             }
         }
 
-        function copyDeobOutput() {
-            const loaderArea = document.getElementById('deobLoaderOutput');
+        function copyLoader() {
+            const loaderArea = document.getElementById('loaderOutput');
+            const copyBtn = document.getElementById('copyBtn');
             loaderArea.select();
             navigator.clipboard.writeText(loaderArea.value);
-            alert("Copied!");
+            copyBtn.innerText = "Copied to Clipboard!";
+            setTimeout(() => { copyBtn.innerText = "Copy Loader"; }, 2000);
+        }
+
+        function copyDeobOutput() {
+            const loaderArea = document.getElementById('deobLoaderOutput');
+            const copyBtn = document.getElementById('copyDeobBtn');
+            loaderArea.select();
+            navigator.clipboard.writeText(loaderArea.value);
+            copyBtn.innerText = "Copied to Clipboard!";
+            setTimeout(() => { copyBtn.innerText = "Copy Cleaned Code"; }, 2000);
         }
     </script>
+</body>
+</html>
+"""
+
+PROTECTED_HTML_TEMPLATE = """<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Protected By Classicfuscator</title>
+    <style>
+        * { box-sizing: border-box; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }
+        body { background-color: #f2f4f8; color: #1e293b; margin: 0; padding: 20px; display: flex; justify-content: center; align-items: center; min-height: 100vh; }
+        .card { background: #ffffff; border-radius: 20px; box-shadow: 0 4px 20px rgba(0, 0, 0, 0.04); width: 100%; max-width: 440px; padding: 40px 28px; border: 1px solid #eef0f4; text-align: center; }
+        h1 { font-size: 24px; font-weight: 700; color: #1a1a1a; margin: 0 0 10px 0; }
+        p { font-size: 15px; color: #64748b; margin: 0; }
+    </style>
+</head>
+<body>
+    <div class="card">
+        <h1>Protected By Classicfuscator</h1>
+        <p>Cannot be shown publicly.</p>
+    </div>
 </body>
 </html>
 """
