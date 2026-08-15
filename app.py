@@ -6,6 +6,7 @@ import re
 import sqlite3
 import time
 import uuid
+import secrets
 import threading
 from collections import defaultdict, deque
 from flask import Flask, jsonify, render_template_string, request, Response
@@ -554,20 +555,37 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             submitBtn.innerText = "Processing...";
 
             try {
+                const controller = new AbortController();
+                const timeout = setTimeout(() => controller.abort(), 30000);
+
                 const response = await fetch('/obfuscate', {
                     method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ code: inputCode, settings: settings })
+                    headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
+                    body: JSON.stringify({ code: inputCode, settings: settings }),
+                    signal: controller.signal
                 });
+                clearTimeout(timeout);
 
-                const data = await response.json();
+                const contentType = response.headers.get('content-type') || '';
+                let data = {};
+                if (contentType.includes('application/json')) {
+                    data = await response.json();
+                } else {
+                    const text = await response.text();
+                    data = { error: text || `Server returned HTTP ${response.status}` };
+                }
+
                 if (response.ok && data.loader) {
                     loaderArea.value = data.loader;
                 } else {
-                    loaderArea.value = "-- Error: " + (data.error || "Compilation failed.");
+                    loaderArea.value = `-- Server error (${response.status}): ${data.error || 'Compilation failed.'}`;
                 }
             } catch (err) {
-                loaderArea.value = "-- Network error: Could not connect to server.";
+                if (err && err.name === 'AbortError') {
+                    loaderArea.value = '-- Error: Server request timed out after 30 seconds.';
+                } else {
+                    loaderArea.value = '-- Network error: ' + (err && err.message ? err.message : 'Could not connect to server.');
+                }
             } finally {
                 submitBtn.innerText = "Start Obfuscation";
             }
@@ -639,9 +657,23 @@ def _validate_source(raw_code):
     return raw_code, None
 
 
+
+@app.errorhandler(Exception)
+def handle_unexpected_error(exc):
+    app.logger.exception("Unhandled server error")
+    return jsonify({
+        "success": False,
+        "error": f"Server error: {type(exc).__name__}"
+    }), 500
+
 @app.route("/", methods=["GET"])
 def index():
     return render_template_string(HTML_TEMPLATE)
+
+@app.route("/health", methods=["GET"])
+def health():
+    """Simple Render/container health endpoint."""
+    return jsonify({"status": "ok", "service": "Classicfuscator", "version": "V3"})
 
 @app.route("/obfuscate", methods=["POST"])
 def process():
@@ -671,11 +703,11 @@ def process():
 
     try:
         obfuscated_code = build_enterprise_vm(raw_code, settings)
-    except Exception:
+    except Exception as exc:
         app.logger.exception("Compilation failed")
         return jsonify({
             "success": False,
-            "error": "Compilation failed."
+            "error": f"Compilation failed: {type(exc).__name__}"
         }), 500
 
     file_path = os.path.join(SAVED_DIR, f"{token}.lua")
