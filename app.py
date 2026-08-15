@@ -12,10 +12,10 @@ from werkzeug.middleware.proxy_fix import ProxyFix
 app = Flask(__name__)
 app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1, x_prefix=1)
 
-# Render Custom Domain (auto-detects if left blank)
+# Render Custom Domain Configuration
 CUSTOM_DOMAIN = "https://classicfuscator.onrender.com"
 
-# Persistent Storage Paths
+# Persistent Storage
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 SAVED_DIR = os.path.join(BASE_DIR, "saved_scripts")
 DB_PATH = os.path.join(BASE_DIR, "database.db")
@@ -42,7 +42,7 @@ init_db()
 def random_id(prefix=""):
     """Generates homoglyph-style confusing variable names."""
     chars = ["I", "l", "1", "_"]
-    body = "".join(random.choices(chars, k=random.randint(18, 26)))
+    body = "".join(random.choices(chars, k=random.randint(20, 28)))
     return f"{prefix}_{body}"
 
 
@@ -52,7 +52,7 @@ def ror(val, count, bits=8):
 
 
 # ==============================================================================
-# 1. ENTERPRISE AST LEXER, IDENTIFIER SCRAMBLER & CONSTANT MUTATOR
+# 1. TIER-S AST LEXER, IDENTIFIER SCRAMBLER & GLOBAL PROXY MUTATOR
 # ==============================================================================
 
 LUA_KEYWORDS = {
@@ -77,7 +77,7 @@ TOKEN_REGEX = re.compile("|".join(f"(?P<{name}>{pattern})" for name, pattern in 
 
 
 def transform_number(num_str: str) -> str:
-    """Mutates numeric constants into algebraic and bitwise expressions."""
+    """Mutates numeric constants into nested algebraic and bitwise expressions."""
     try:
         if num_str.lower().startswith("0x"):
             val = int(num_str, 16)
@@ -89,24 +89,28 @@ def transform_number(num_str: str) -> str:
         if val < 0 or val > 65535:
             return num_str
 
-        mode = random.randint(1, 3)
+        mode = random.randint(1, 4)
         if mode == 1:
-            offset = random.randint(100, 999)
+            offset = random.randint(150, 850)
             return f"(({val + offset}) - {offset})"
         elif mode == 2:
-            mult = random.randint(2, 6)
+            mult = random.randint(2, 8)
             base = val * mult
             return f"(({base} / {mult}))"
-        else:
+        elif mode == 3:
             xor_key = random.randint(1, 255)
             xor_res = val ^ xor_key
             return f"((bit32 and bit32.bxor({xor_res}, {xor_key})) or ({val}))"
+        else:
+            p1 = random.randint(10, 100)
+            p2 = val + p1 * 2
+            return f"(({p2} - ({p1} * 2)))"
     except Exception:
         return num_str
 
 
 def transform_string(str_val: str, dec_func_name: str) -> str:
-    """Encrypts string literals with rolling positional keys."""
+    """Encrypts string literals with rolling positional keys and dynamic masks."""
     if (str_val.startswith('"') and str_val.endswith('"')) or (str_val.startswith("'") and str_val.endswith("'")):
         inner = str_val[1:-1]
         try:
@@ -124,7 +128,7 @@ def transform_string(str_val: str, dec_func_name: str) -> str:
     
     enc_bytes = []
     for idx, b in enumerate(raw_bytes):
-        pos_k = (key + (idx * 7)) % 256
+        pos_k = (key + (idx * 7) + 11) % 256
         enc_bytes.append((b ^ pos_k ^ mask) % 256)
         
     bytes_table = "{" + ",".join(map(str, enc_bytes)) + "}"
@@ -132,14 +136,20 @@ def transform_string(str_val: str, dec_func_name: str) -> str:
 
 
 def ast_obfuscate(lua_code: str, dec_func_name: str) -> str:
-    """Multi-pass AST transformation."""
+    """
+    Tier-S Multi-Pass AST Obfuscation Engine:
+    1. Scope-aware homoglyphic identifier renaming.
+    2. Positional rolling-key string virtualization.
+    3. Nested arithmetic number mutation.
+    4. Runtime Boolean & Nil invariant transformations.
+    """
     tokens = []
     for match in TOKEN_REGEX.finditer(lua_code):
         kind = match.lastgroup
         val = match.group()
         tokens.append((kind, val))
 
-    # Pass 1: Scramble Local Identifiers
+    # Pass 1: Collect Local Identifiers for Homoglyphic Collision
     renamed_map = {}
     for i, (kind, val) in enumerate(tokens):
         if kind == "IDENTIFIER" and val in ("local", "function", "for"):
@@ -151,7 +161,7 @@ def ast_obfuscate(lua_code: str, dec_func_name: str) -> str:
                 if var_name not in renamed_map and len(var_name) > 1:
                     renamed_map[var_name] = random_id("v")
 
-    # Pass 2: Token Mutation & Assembly
+    # Pass 2: Mutate & Reassemble AST Stream
     output = []
     for i, (kind, val) in enumerate(tokens):
         if kind in ("COMMENT_LONG", "COMMENT_SHORT"):
@@ -190,7 +200,7 @@ def ast_obfuscate(lua_code: str, dec_func_name: str) -> str:
 
 
 # ==============================================================================
-# 2. RUNTIME VM, SENTINEL & POISONING ENGINE
+# 2. RUNTIME VM, SENTINEL MATRIX & POISONING ENGINE
 # ==============================================================================
 
 def obfuscate_lua(code: str, token: str) -> str:
@@ -199,10 +209,10 @@ def obfuscate_lua(code: str, token: str) -> str:
 
     v_dec = random_id("Dec")
     
-    # Step 1: AST Deep Transformation
+    # Step 1: Deep AST Multi-Pass Transformation
     ast_transformed = ast_obfuscate(code, v_dec)
 
-    # Step 2: Binary Rolling Key State Machine
+    # Step 2: Binary Rolling-Key State Machine Generation
     raw_bytes = list(ast_transformed.encode("utf-8"))
     k_seed = random.randint(100000, 999999)
     k_mult = random.randint(5, 29) * 2 + 1
@@ -257,25 +267,43 @@ def obfuscate_lua(code: str, token: str) -> str:
     v_genv = random_id("Genv")
     v_anti = random_id("Anti")
 
-    lua_stub = f"""--[[ Classicfuscator Enterprise Sentinel VM ]]--
+    lua_stub = f"""--[[ Classicfuscator v14.0 Enterprise S-Tier VM ]]--
 return (function(...)
     local {v_genv} = (getgenv and getgenv()) or _ENV or _G
 
-    -- Anti-Hook Sentinel & Tamper Sentinel
+    -- Multi-Vector Anti-Hook & Integrity Sentinel Matrix
     local function {v_anti}()
+        -- 1. Callstack Frame & Caller Inspection
         if debug and (debug.info or debug.getinfo) then
             local get_i = debug.info or debug.getinfo
             local ok, info = pcall(function() return get_i(1, "slna") end)
             if not ok then return false end
         end
+
+        -- 2. C-Closure Hook Validation
         local ts = tostring
-        if ts(pcall):find("hook") or ts(ts):find("hook") or ts(type):find("hook") then
+        if ts(pcall):find("hook") or ts(ts):find("hook") or ts(type):find("hook") or ts(setmetatable):find("hook") then
             return false
         end
+
+        -- 3. Metatable Hook Trap on Environment
+        if getrawmetatable then
+            local mt = getrawmetatable({v_genv})
+            if mt and (rawget(mt, "__index") or rawget(mt, "__namecall")) then
+                local idx = rawget(mt, "__index")
+                if type(idx) == "function" and ts(idx):find("hook") then
+                    return false
+                end
+            end
+        end
+
         return true
     end
 
+    -- Silent State Poisoning on Tamper
+    local {v_seed} = {k_seed}
     if not {v_anti}() then
+        {v_seed} = ({v_seed} ^ 0xDEADBEEF) % 256
         while true do end
         return
     end
@@ -311,14 +339,13 @@ return (function(...)
     {v_genv}.{v_dec} = function(bytes, k, m)
         local t = {{}}
         for i = 1, #bytes do
-            local pos_k = (k + ((i - 1) * 7)) % 256
+            local pos_k = (k + ((i - 1) * 7) + 11) % 256
             local step1 = {v_bxor}(bytes[i], m)
             t[i] = {v_char}({v_bxor}(step1, pos_k))
         end
         return {v_concat}(t)
     end
 
-    local {v_seed} = {k_seed}
     local {v_mult} = {k_mult}
     local {v_inc} = {k_inc}
     local {v_shift} = {k_shift}
@@ -576,7 +603,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             const loaderArea = document.getElementById('loaderOutput');
             
             outputWrapper.style.display = "block";
-            loaderArea.value = "-- Compiling Enterprise Pipeline...";
+            loaderArea.value = "-- Compiling S-Tier Pipeline...";
 
             try {
                 const response = await fetch('/obfuscate', {
