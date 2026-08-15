@@ -215,45 +215,44 @@ HTML_TEMPLATE = """<!DOCTYPE html>
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Classicfuscator Enterprise - Hardened VM</title>
+    <title>Classicfuscator</title>
     <style>
-        * { box-sizing: border-box; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
-        body { background-color: #0b132b; color: #f8fafc; margin: 0; padding: 40px 20px; display: flex; justify-content: center; align-items: center; min-height: 100vh; }
-        .card { background: #1c2541; border-radius: 16px; box-shadow: 0 20px 50px rgba(0, 0, 0, 0.5); width: 100%; max-width: 640px; padding: 32px; border: 1px solid #3a506b; }
-        h1 { font-size: 24px; font-weight: 800; color: #6fffe9; margin: 0 0 20px 0; }
-        .form-group { margin-bottom: 18px; }
-        .section-label { font-size: 13px; font-weight: 600; color: #a5a5a5; margin-bottom: 8px; display: block; }
-        textarea, input[type="text"] { width: 100%; border: 1px solid #3a506b; border-radius: 10px; padding: 14px; font-family: monospace; font-size: 13px; outline: none; background-color: #0b132b; color: #6fffe9; }
-        textarea:focus, input[type="text"]:focus { border-color: #5bc0be; }
-        textarea { height: 160px; }
-        .btn { width: 100%; padding: 14px; background-color: #5bc0be; color: #0b132b; border: none; border-radius: 8px; font-size: 15px; font-weight: 700; cursor: pointer; margin-top: 10px; transition: all 0.2s ease; }
-        .btn:hover { background-color: #6fffe9; }
+        * { box-sizing: border-box; font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+        body { background-color: #edf3fa; color: #1f2937; margin: 0; padding: 40px 20px; display: flex; justify-content: center; align-items: center; min-height: 100vh; }
+        .card { background: #ffffff; border-radius: 24px; box-shadow: 0 10px 40px rgba(0, 0, 0, 0.04); width: 100%; max-width: 480px; padding: 36px 32px; }
+        h1 { font-size: 28px; font-weight: 800; color: #0066ff; margin: 0 0 24px 0; }
+        .form-group { margin-bottom: 20px; }
+        .section-label { font-size: 14px; font-weight: 700; color: #374151; margin-bottom: 8px; display: block; }
+        input[type="text"], textarea { width: 100%; border: 1px solid #e5e7eb; border-radius: 12px; padding: 14px 16px; font-size: 14px; outline: none; background-color: #ffffff; color: #111827; transition: border-color 0.2s ease, box-shadow 0.2s ease; }
+        textarea { height: 180px; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; resize: vertical; }
+        input[type="text"]:focus, textarea:focus { border-color: #0066ff; box-shadow: 0 0 0 3px rgba(0, 102, 255, 0.1); }
+        .btn { width: 100%; padding: 16px; background-color: #0066ff; color: #ffffff; border: none; border-radius: 12px; font-size: 15px; font-weight: 700; cursor: pointer; margin-top: 10px; transition: background-color 0.2s ease; }
+        .btn:hover { background-color: #0052cc; }
         .output-container { margin-top: 24px; display: none; }
-        .loader-box { background: #0b132b; border: 1px solid #5bc0be; border-radius: 10px; padding: 16px; margin-bottom: 15px; }
+        .loader-box { background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 12px; padding: 16px; }
     </style>
 </head>
 <body>
     <div class="card">
-        <h1>🛡️ Classicfuscator Hardened VM</h1>
+        <h1>Classicfuscator</h1>
 
         <div class="form-group">
-            <span class="section-label">Paste Lua / Luau Source:</span>
-            <textarea id="input" placeholder="print('Hello World')"></textarea>
+            <span class="section-label">Custom Script Name:</span>
+            <input type="text" id="scriptName" value="my_script.lua" placeholder="my_script.lua" />
+        </div>
+
+        <div class="form-group">
+            <span class="section-label">Paste Lua Code:</span>
+            <textarea id="input" placeholder="print('Hello World!')">print('Hello World!')</textarea>
         </div>
 
         <button class="btn" onclick="obfuscate()">Obfuscate & Generate Loader</button>
 
         <div class="output-container" id="outputWrapper">
             <div class="loader-box">
-                <span class="section-label" style="color: #6fffe9;">🚀 Roblox Loader Script:</span>
-                <textarea id="loaderOutput" style="height: 70px;" readonly></textarea>
-                <button class="btn" style="background-color: #3a506b; color: #ffffff;" onclick="copyLoader()">Copy Loader</button>
-            </div>
-
-            <div class="loader-box">
-                <span class="section-label" style="color: #ff6b6b;">🔑 Generated Password (55 Characters):</span>
-                <input type="text" id="passwordOutput" readonly />
-                <button class="btn" style="background-color: #3a506b; color: #ffffff;" onclick="copyPassword()">Copy Password</button>
+                <span class="section-label" style="color: #0066ff;">Generated Roblox Loader:</span>
+                <textarea id="loaderOutput" style="height: 90px;" readonly></textarea>
+                <button class="btn" style="background-color: #374151; margin-top: 10px;" onclick="copyLoader()">Copy Loader</button>
             </div>
         </div>
     </div>
@@ -261,27 +260,24 @@ HTML_TEMPLATE = """<!DOCTYPE html>
     <script>
         async function obfuscate() {
             const inputCode = document.getElementById('input').value;
+            const scriptName = document.getElementById('scriptName').value;
             const outputWrapper = document.getElementById('outputWrapper');
             const loaderArea = document.getElementById('loaderOutput');
-            const passwordArea = document.getElementById('passwordOutput');
             
             outputWrapper.style.display = "block";
-            loaderArea.value = "-- Processing Hardened VM Cipher...";
-            passwordArea.value = "Generating...";
+            loaderArea.value = "-- Processing script...";
 
             try {
                 const response = await fetch('/obfuscate', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ code: inputCode })
+                    body: JSON.stringify({ code: inputCode, script_name: scriptName })
                 });
 
                 const data = await response.json();
                 loaderArea.value = data.loader || "-- Error generating loader.";
-                passwordArea.value = data.password || "";
             } catch (err) {
                 loaderArea.value = "-- Generation failed: " + err;
-                passwordArea.value = "";
             }
         }
 
@@ -290,13 +286,6 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             loaderArea.select();
             navigator.clipboard.writeText(loaderArea.value);
             alert('Loader copied to clipboard!');
-        }
-
-        function copyPassword() {
-            const passwordArea = document.getElementById('passwordOutput');
-            passwordArea.select();
-            navigator.clipboard.writeText(passwordArea.value);
-            alert('Password copied to clipboard!');
         }
     </script>
 </body>
@@ -310,29 +299,29 @@ PASSWORD_GATE_TEMPLATE = """<!DOCTYPE html>
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Access Protected Script</title>
     <style>
-        * { box-sizing: border-box; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
-        body { background-color: #0b132b; color: #f8fafc; margin: 0; padding: 40px 20px; display: flex; justify-content: center; align-items: center; min-height: 100vh; }
-        .card { background: #1c2541; border-radius: 16px; box-shadow: 0 20px 50px rgba(0, 0, 0, 0.5); width: 100%; max-width: 500px; padding: 32px; border: 1px solid #3a506b; }
-        h1 { font-size: 20px; font-weight: 800; color: #6fffe9; margin: 0 0 15px 0; text-align: center; }
-        p { font-size: 13px; color: #a5a5a5; text-align: center; margin-bottom: 20px; }
-        input[type="password"], input[type="text"] { width: 100%; border: 1px solid #3a506b; border-radius: 10px; padding: 14px; font-family: monospace; font-size: 13px; outline: none; background-color: #0b132b; color: #6fffe9; margin-bottom: 15px; }
-        input:focus { border-color: #5bc0be; }
-        .btn { width: 100%; padding: 14px; background-color: #5bc0be; color: #0b132b; border: none; border-radius: 8px; font-size: 15px; font-weight: 700; cursor: pointer; transition: all 0.2s ease; }
-        .btn:hover { background-color: #6fffe9; }
-        .error { color: #ff6b6b; font-size: 13px; margin-bottom: 15px; text-align: center; }
+        * { box-sizing: border-box; font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+        body { background-color: #edf3fa; color: #1f2937; margin: 0; padding: 40px 20px; display: flex; justify-content: center; align-items: center; min-height: 100vh; }
+        .card { background: #ffffff; border-radius: 24px; box-shadow: 0 10px 40px rgba(0, 0, 0, 0.04); width: 100%; max-width: 480px; padding: 36px 32px; }
+        h1 { font-size: 22px; font-weight: 800; color: #0066ff; margin: 0 0 12px 0; text-align: center; }
+        p { font-size: 14px; color: #6b7280; text-align: center; margin-bottom: 20px; }
+        input[type="text"] { width: 100%; border: 1px solid #e5e7eb; border-radius: 12px; padding: 14px 16px; font-size: 14px; outline: none; background-color: #ffffff; color: #111827; margin-bottom: 16px; }
+        input[type="text"]:focus { border-color: #0066ff; box-shadow: 0 0 0 3px rgba(0, 102, 255, 0.1); }
+        .btn { width: 100%; padding: 16px; background-color: #0066ff; color: #ffffff; border: none; border-radius: 12px; font-size: 15px; font-weight: 700; cursor: pointer; transition: background-color 0.2s ease; }
+        .btn:hover { background-color: #0052cc; }
+        .error { color: #ef4444; font-size: 14px; margin-bottom: 16px; text-align: center; font-weight: 600; }
     </style>
 </head>
 <body>
     <div class="card">
-        <h1>🔒 Protected Script Access</h1>
-        <p>Please enter the 55-character password to unlock the obfuscated script.</p>
+        <h1>Protected Script Access</h1>
+        <p>Please enter the 55-character password to unlock the script.</p>
 
         {% if error %}
             <div class="error">{{ error }}</div>
         {% endif %}
 
         <form method="GET" action="">
-            <input type="text" name="password" placeholder="Enter 55-character password..." required maxlength="55" autocomplete="off" />
+            <input type="text" name="password" placeholder="Enter password..." required maxlength="55" autocomplete="off" />
             <button type="submit" class="btn">Unlock & View Script</button>
         </form>
     </div>
@@ -374,23 +363,21 @@ def process():
     if domain_url.startswith("http://") and not ("127.0.0.1" in domain_url or "localhost" in domain_url):
         domain_url = domain_url.replace("http://", "https://", 1)
 
+    # Password embedded inside the game:HttpGet URL
     loader_script = f'loadstring(game:HttpGet("{domain_url}/raw/{token}?password={password}"))()'
 
     return jsonify({
         "loader": loader_script,
-        "token": token,
-        "password": password
+        "token": token
     })
 
 
 @app.route("/raw/<token>", methods=["GET", "POST"])
 def serve_script(token):
     """
-    Serves payload after validating the 55-character password.
-    Displays an interactive password form if accessed in a browser without valid key.
+    Serves payload when accessed via game:HttpGet containing the password query parameter.
+    Displays password prompt interface if accessed via browser without a valid password.
     """
-    user_agent = request.headers.get("User-Agent", "")
-
     # Retrieve script record from cache or disk
     record = SCRIPT_CACHE.get(token)
     if not record:
@@ -411,7 +398,7 @@ def serve_script(token):
     # Get password attempt from query parameters or form submission
     provided_password = request.args.get("password") or request.form.get("password")
 
-    # If valid password provided, return the raw obfuscated script
+    # If valid password provided in game:HttpGet or form, return the raw script
     if provided_password and secrets.compare_digest(provided_password, target_password):
         res = Response(code, mimetype="text/plain")
         res.headers["Access-Control-Allow-Origin"] = "*"
