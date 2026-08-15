@@ -2,6 +2,7 @@ import math
 import os
 import random
 import re
+import sqlite3
 import string
 import time
 import uuid
@@ -11,11 +12,28 @@ from werkzeug.middleware.proxy_fix import ProxyFix
 app = Flask(__name__)
 app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1, x_prefix=1)
 
-# In-Memory Cache + Disk Storage
-SCRIPT_CACHE = {}
+# Persistent Storage Setup
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 SAVED_DIR = os.path.join(BASE_DIR, "saved_scripts")
+DB_PATH = os.path.join(BASE_DIR, "database.db")
 os.makedirs(SAVED_DIR, exist_ok=True)
+
+SCRIPT_CACHE = {}
+
+
+def init_db():
+    """Initializes SQLite database to persist tokens across server restarts."""
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute(
+        """CREATE TABLE IF NOT EXISTS scripts 
+           (token TEXT PRIMARY KEY, code TEXT, created_at REAL)"""
+    )
+    conn.commit()
+    conn.close()
+
+
+init_db()
 
 
 def random_id(prefix=""):
@@ -115,7 +133,7 @@ def obfuscate_lua(code: str, token: str) -> str:
     v_t0 = random_id("T0")
 
     # 5. Hardened Custom VM Stub (Luau Safe Engine)
-    lua_stub = f"""--[[ Classicfuscator v8.6 Enterprise VM ]]--
+    lua_stub = f"""--[[ Classicfuscator v8.7 Enterprise VM ]]--
 return (function(...)
     local {v_env} = (getgenv and getgenv()) or _ENV or _G
     local {v_loader} = {v_env}.loadstring or load
@@ -535,10 +553,23 @@ def process():
         "active": True
     }
     
-    # Store on Disk
+    # Store in Disk File
     file_path = os.path.join(SAVED_DIR, f"{token}.lua")
     with open(file_path, "w", encoding="utf-8") as f:
         f.write(obfuscated_code)
+
+    # Store in Persistent SQLite Database
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        c = conn.cursor()
+        c.execute(
+            "INSERT OR REPLACE INTO scripts (token, code, created_at) VALUES (?, ?, ?)",
+            (token, obfuscated_code, time.time()),
+        )
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        print("DB Save Error:", e)
     
     # Enforce HTTPS URL
     domain_url = request.host_url.rstrip("/")
@@ -566,26 +597,45 @@ def serve_script(token):
     """
     Serves raw payload to Roblox client, while serving a styled card to web browsers.
     """
-    user_agent = request.headers.get("User-Agent", "")
+    user_agent = request.headers.get("User-Agent", "").lower()
 
-    # Roblox Client Check
-    is_local = "127.0.0.1" in request.host or "localhost" in request.host
-    is_roblox = "Roblox" in user_agent or is_local
+    # Browser Detection (Chrome, Safari, Firefox, Edge, Opera)
+    is_browser = any(b in user_agent for b in ["mozilla", "chrome", "safari", "firefox", "edge", "opera"])
+    is_roblox_client = any(r in user_agent for r in ["roblox", "android", "iphone", "ipad"]) or not is_browser
 
-    # If opened in a web browser, render the styled card page
-    if not is_roblox:
+    # If opened directly in a standard web browser, render the styled card page
+    if is_browser and "roblox" not in user_agent:
         return render_template_string(PROTECTED_HTML_TEMPLATE)
 
-    # Roblox client execution path
+    # Roblox Client / Executor Retrieval
     code = None
+
+    # Check RAM Cache
     if token in SCRIPT_CACHE:
         code = SCRIPT_CACHE[token]["code"]
-    else:
+
+    # Check Persistent SQLite Database
+    if not code:
+        try:
+            conn = sqlite3.connect(DB_PATH)
+            c = conn.cursor()
+            c.execute("SELECT code FROM scripts WHERE token = ?", (token,))
+            row = c.fetchone()
+            if row:
+                code = row[0]
+                SCRIPT_CACHE[token] = {"code": code, "created_at": time.time(), "active": True}
+            conn.close()
+        except Exception as e:
+            print("DB Read Error:", e)
+
+    # Check Disk Storage
+    if not code:
         file_path = os.path.join(SAVED_DIR, f"{token}.lua")
         if os.path.exists(file_path):
             with open(file_path, "r", encoding="utf-8") as f:
                 code = f.read()
 
+    # If code found, return HTTP 200 plain text payload
     if code:
         res = Response(code, mimetype="text/plain")
         res.headers["Access-Control-Allow-Origin"] = "*"
@@ -593,7 +643,8 @@ def serve_script(token):
         res.headers["Pragma"] = "no-cache"
         return res
 
-    return render_template_string(PROTECTED_HTML_TEMPLATE), 404
+    # Graceful Fallback: Return HTTP 200 Lua Comment so Roblox doesn't crash with 404
+    return Response("-- Error: Invalid or Expired Token. Please generate a new loader from Classicfuscator.", status=200, mimetype="text/plain")
 
 
 if __name__ == "__main__":
