@@ -48,71 +48,20 @@ def ror(val, count, bits=8):
     return ((val >> count) | (val << (bits - count))) & 0xFF
 
 
-def virtualize_constants_and_tokens(code: str):
-    """
-    Lexically extracts all string literals into a Constant Pool Table (_K[]),
-    eliminating plaintext string constants.
-    """
-    constants = []
-
-    def add_const(val):
-        if val in constants:
-            return constants.index(val)
-        constants.append(val)
-        return len(constants) - 1
-
-    def double_quote_sub(m):
-        s = m.group(1)
-        if not s or len(s) > 120 or "\n" in s:
-            return m.group(0)
-        c_idx = add_const(s)
-        return f"_K[{c_idx + 1}]"
-
-    def single_quote_sub(m):
-        s = m.group(1)
-        if not s or len(s) > 120 or "\n" in s:
-            return m.group(0)
-        c_idx = add_const(s)
-        return f"_K[{c_idx + 1}]"
-
-    dq_pattern = r'"([^"\\]*(?:\\.[^"\\]*)*)"'
-    sq_pattern = r"'([^'\\]*(?:\\.[^'\\]*)*)'"
-
-    try:
-        processed = re.sub(dq_pattern, double_quote_sub, code)
-        processed = re.sub(sq_pattern, single_quote_sub, processed)
-        return processed, constants
-    except Exception:
-        return code, []
-
-
 def obfuscate_lua(code: str, token: str) -> str:
     if not code.strip():
         return "-- Error: Empty script provided."
 
-    # 1. Virtualize Constants and wrap code to accept _K as a parameter
-    processed_code, constants = virtualize_constants_and_tokens(code)
-    wrapped_code = f"return (function(_K, ...)\n{processed_code}\nend)"
-    raw_bytes = list(wrapped_code.encode("utf-8"))
+    # 1. Convert raw code to UTF-8 byte stream (Preserves 100% original syntax)
+    raw_bytes = list(code.encode("utf-8"))
 
-    # 2. Encrypt Constants Pool
+    # 2. Encrypt byte stream with rolling positional keys
     k_seed = random.randint(100000, 999999)
     k_mult = random.randint(5, 29) * 2 + 1
     k_inc = random.randint(1, 255)
     k_shift = random.randint(1, 7)
     k_mask = random.randint(16, 240)
 
-    enc_constants = []
-    for c_idx, const_str in enumerate(constants):
-        c_bytes = list(const_str.encode("utf-8"))
-        enc_c = []
-        c_key = (k_seed + c_idx * 17) % 256
-        for b_idx, b in enumerate(c_bytes):
-            c_key = (c_key * k_mult + k_inc + b_idx) % 256
-            enc_c.append((ror(b, k_shift) ^ c_key ^ k_mask ^ ((b_idx * 7 + 11) % 256)) % 256)
-        enc_constants.append(enc_c)
-
-    # 3. Encrypt Raw Code Byte Stream
     encrypted_bytes = []
     c_key = k_seed
     for idx, byte in enumerate(raw_bytes):
@@ -122,34 +71,32 @@ def obfuscate_lua(code: str, token: str) -> str:
         enc = (rotated ^ c_key ^ k_mask ^ pos_key) % 256
         encrypted_bytes.append(enc)
 
-    # 4. Control Flow Flattening & State Machine Dispatcher
+    # 3. Dynamic Sub-Table Chunking
     chunk_size = random.randint(14, 28)
     chunks = [
         encrypted_bytes[i : i + chunk_size]
         for i in range(0, len(encrypted_bytes), chunk_size)
     ]
 
+    # Create Shuffled State Machine Dispatcher
     chunk_states = list(range(100, 100 + len(chunks)))
     state_map = {}
     for idx, state_id in enumerate(chunk_states):
         next_state = chunk_states[idx + 1] if idx + 1 < len(chunk_states) else 0
         state_map[state_id] = (chunks[idx], next_state)
 
-    # Convert to Lua Tables
-    consts_lua = "{" + ",".join("{" + ",".join(map(str, c)) + "}" for c in enc_constants) + "}"
+    # Convert to Lua Table Representations
     chunks_lua = "{" + ",".join(f"[{s}]={'{' + ','.join(map(str, c[0])) + '}'}" for s, c in state_map.items()) + "}"
     trans_lua = "{" + ",".join(f"[{s}]={c[1]}" for s, c in state_map.items()) + "}"
     start_state = chunk_states[0]
 
-    # 5. Randomized Homoglyph Identifiers
+    # 4. Randomized Identifiers
     v_env = random_id("Env")
     v_loader = random_id("Ld")
     v_char = random_id("Chr")
     v_concat = random_id("Cat")
     v_bxor = random_id("Bx")
     v_rol = random_id("Rl")
-    v_enc_k = random_id("EK")
-    v_kpool = random_id("K")
     v_chunks = random_id("Data")
     v_trans = random_id("Tr")
     v_state = random_id("St")
@@ -163,10 +110,9 @@ def obfuscate_lua(code: str, token: str) -> str:
     v_clean = random_id("Cln")
     v_res = random_id("Res")
     v_err = random_id("Err")
-    v_func = random_id("Fn")
 
-    # 6. Hardened Custom VM Stub
-    lua_stub = f"""--[[ Classicfuscator v9.1 Enterprise VM ]]--
+    # 5. Hardened Custom VM Stub
+    lua_stub = f"""--[[ Classicfuscator v9.2 Enterprise VM ]]--
 return (function(...)
     local {v_env} = (getgenv and getgenv()) or _ENV or _G
     local {v_loader} = {v_env}.loadstring or load
@@ -194,7 +140,8 @@ return (function(...)
     end)()
 
     if not {v_clean} then
-        error("[Classicfuscator] Security Alert: Execution Loader Hook Detected", 0)
+        warn("[Classicfuscator] Security Alert: Execution Loader Hook Detected")
+        return (function() end)()
     end
     {v_clean} = nil
 
@@ -225,32 +172,13 @@ return (function(...)
     local {v_shift} = {k_shift}
     local {v_mask} = {k_mask}
 
-    -- Decrypt Constant Pool (_K Table Register)
-    local {v_enc_k} = {consts_lua}
-    local {v_kpool} = {{}}
-    for c_idx = 1, #{v_enc_k} do
-        local raw_c = {v_enc_k}[c_idx]
-        local c_out = {{}}
-        local c_key = ({v_seed} + (c_idx - 1) * 17) % 256
-        for b_idx = 1, #raw_c do
-            c_key = (c_key * {v_mult} + {v_inc} + (b_idx - 1)) % 256
-            local pos_key = ((b_idx - 1) * 7 + 11) % 256
-            local step1 = {v_bxor}(raw_c[b_idx], pos_key)
-            local step2 = {v_bxor}(step1, {v_mask})
-            local step3 = {v_bxor}(step2, c_key)
-            c_out[#c_out + 1] = {v_char}({v_rol}(step3, {v_shift}))
-        end
-        {v_kpool}[c_idx] = {v_concat}(c_out)
-    end
-    {v_enc_k} = nil
-
-    -- Control-Flow Flattened Execution Loop
     local {v_chunks} = {chunks_lua}
     local {v_trans} = {trans_lua}
     local {v_state} = {start_state}
     local {v_out} = {{}}
     local {v_idx} = 0
 
+    -- Control-Flow Flattened Execution Loop
     while {v_state} ~= 0 do
         local chunk = {v_chunks}[{v_state}]
         if not chunk then break end
@@ -281,14 +209,10 @@ return (function(...)
     payload_str = nil
 
     if type({v_res}) == "function" then
-        local {v_func} = {v_res}()
-        if type({v_func}) == "function" then
-            return {v_func}({v_kpool}, ...)
-        else
-            return {v_res}({v_kpool}, ...)
-        end
+        return {v_res}(...)
     else
-        error("[Classicfuscator] Syntax Error in Payload: " .. tostring({v_err}), 0)
+        warn("[Classicfuscator] Syntax Error in Payload: " .. tostring({v_err}))
+        error("[Classicfuscator] Payload compilation failed.", 0)
     end
 end)(...)"""
 
@@ -579,7 +503,7 @@ def process():
     # Generate dynamic 32-character Hex Token
     token = uuid.uuid4().hex
     
-    # Compile with Constant Pool Virtualization + State Machine VM
+    # Compile with State Machine VM
     obfuscated_code = obfuscate_lua(raw_code, token)
     
     # Store in RAM Cache
@@ -634,16 +558,22 @@ def serve_script(token):
     Serves raw payload to Roblox client, while serving a styled card to web browsers.
     """
     user_agent = request.headers.get("User-Agent", "").lower()
+    fetch_mode = request.headers.get("Sec-Fetch-Mode", "").lower()
+    has_ch_ua = bool(request.headers.get("Sec-Ch-Ua"))
+    accept_hdr = request.headers.get("Accept", "").lower()
 
-    # Browser Detection (Chrome, Safari, Firefox, Edge, Opera)
-    is_browser = any(b in user_agent for b in ["mozilla", "chrome", "safari", "firefox", "edge", "opera"])
-    is_roblox_client = any(r in user_agent for r in ["roblox", "android", "iphone", "ipad"]) or not is_browser
+    # Precision Browser Navigation Check (Chrome, Edge, Safari, Firefox)
+    is_browser_navigation = (
+        fetch_mode == "navigate" or 
+        has_ch_ua or 
+        ("text/html" in accept_hdr and "roblox" not in user_agent)
+    )
 
-    # If opened directly in a standard web browser, render the styled card page
-    if is_browser and "roblox" not in user_agent:
+    # If accessed by human browser navigation, render styled HTML card page
+    if is_browser_navigation:
         return render_template_string(PROTECTED_HTML_TEMPLATE)
 
-    # Roblox Client / Executor Retrieval
+    # Roblox Client / Executor Retrieval Path
     code = None
 
     # Check RAM Cache
