@@ -30,111 +30,100 @@ def ror(val, count, bits=8):
     return ((val >> count) | (val << (bits - count))) & 0xFF
 
 
-class LuauBytecodeCompiler:
+def encode_string_literals(code: str) -> str:
     """
-    Custom Binary Register Bytecode Compiler.
-    Transforms raw Lua source code into custom opcode registers,
-    eliminating the need for loadstring() entirely.
+    Safely converts simple string literals into string.char(...) byte constructors
+    to prevent plaintext strings from appearing in memory dumps.
     """
-    def __init__(self):
-        # Opcode Enum Definitions
-        self.OP_LOADK = 1       # Load Constant [Reg, ConstIdx]
-        self.OP_GETGLOBAL = 2   # Get Global    [Reg, ConstIdx]
-        self.OP_SETGLOBAL = 3   # Set Global    [Reg, ConstIdx]
-        self.OP_CALL = 4        # Call Function [FuncReg, ArgCount, RetCount]
-        self.OP_CONCAT = 5      # Concatenate   [DestReg, StartReg, EndReg]
-        self.OP_RETURN = 6      # Return        [StartReg, Count]
+    def replacer(match):
+        s = match.group(1) or match.group(2)
+        if not s or len(s) > 100 or "\n" in s or "\\" in s:
+            return match.group(0)
+        bytes_str = ",".join(str(ord(c)) for c in s)
+        return f"string.char({bytes_str})"
 
-    def compile(self, code: str):
-        # Tokenize / Parse simple statements & expressions
-        constants = []
-        instructions = []
-
-        def get_const_idx(val):
-            if val in constants:
-                return constants.index(val)
-            constants.append(val)
-            return len(constants) - 1
-
-        lines = [l.strip() for l in code.splitlines() if l.strip() and not l.strip().startswith("--")]
-        
-        for line in lines:
-            # Match print(...) or global function calls
-            call_match = re.match(r'^([a-zA-Z0-9_]+)\((.*)\)$', line)
-            if call_match:
-                func_name, args_raw = call_match.groups()
-                f_idx = get_const_idx(func_name)
-                
-                # Register 0 = Function
-                instructions.append([self.OP_GETGLOBAL, 0, f_idx])
-                
-                # Parse arguments
-                arg_regs = []
-                if args_raw.strip():
-                    raw_args = [a.strip().strip("'\"") for a in args_raw.split(",")]
-                    for idx, arg_val in enumerate(raw_args):
-                        reg = idx + 1
-                        c_idx = get_const_idx(arg_val)
-                        instructions.append([self.OP_LOADK, reg, c_idx])
-                        arg_regs.append(reg)
-                        
-                instructions.append([self.OP_CALL, 0, len(arg_regs), 0])
-                continue
-
-            # Fallback for complex statements
-            c_idx = get_const_idx(line)
-            instructions.append([self.OP_LOADK, 0, c_idx])
-
-        return constants, instructions
+    pattern = r'"([^"\\]*)"|\'([^\'\\]*)\''
+    try:
+        return re.sub(pattern, replacer, code)
+    except Exception:
+        return code
 
 
 def obfuscate_lua(code: str, token: str) -> str:
     if not code.strip():
         return "-- Error: Empty script provided."
 
-    compiler = LuauBytecodeCompiler()
-    constants, instructions = compiler.compile(code)
+    # 1. Pre-process string literals into string.char byte arrays
+    processed_code = encode_string_literals(code)
+    raw_bytes = list(processed_code.encode("utf-8"))
 
-    # Cryptographic Seed Keys
+    # 2. Encrypt byte stream with rolling positional keys
     k_seed = random.randint(100000, 999999)
+    k_mult = random.randint(5, 29) * 2 + 1
+    k_inc = random.randint(1, 255)
     k_shift = random.randint(1, 7)
     k_mask = random.randint(16, 240)
 
-    # Encrypt Constants
-    enc_constants = []
-    for idx, const in enumerate(constants):
-        c_bytes = list(str(const).encode("utf-8"))
-        enc_b = []
-        key = (k_seed + idx * 19) % 256
-        for b_idx, b in enumerate(c_bytes):
-            key = (key * 13 + 41 + b_idx) % 256
-            enc_b.append((ror(b, k_shift) ^ key ^ k_mask) % 256)
-        enc_constants.append(enc_b)
+    encrypted_bytes = []
+    c_key = k_seed
+    for idx, byte in enumerate(raw_bytes):
+        c_key = (c_key * k_mult + k_inc + idx * 13) % 256
+        rotated = ror(byte, k_shift)
+        pos_key = (idx * 7 + 13) % 256
+        enc = (rotated ^ c_key ^ k_mask ^ pos_key) % 256
+        encrypted_bytes.append(enc)
 
-    # Format Lua Tables
-    const_lua = "{" + ",".join("{" + ",".join(map(str, c)) + "}" for c in enc_constants) + "}"
-    inst_lua = "{" + ",".join("{" + ",".join(map(str, i)) + "}" for i in instructions) + "}"
+    # 3. Dynamic Sub-Table Chunking
+    chunk_size = random.randint(14, 28)
+    chunks = [
+        encrypted_bytes[i : i + chunk_size]
+        for i in range(0, len(encrypted_bytes), chunk_size)
+    ]
 
-    # Randomized VM Identifiers
+    # Create Shuffled State Machine Dispatcher
+    chunk_states = list(range(100, 100 + len(chunks)))
+    state_map = {}
+    for idx, state_id in enumerate(chunk_states):
+        next_state = chunk_states[idx + 1] if idx + 1 < len(chunk_states) else 0
+        state_map[state_id] = (chunks[idx], next_state)
+
+    # Convert to Lua Table Representations
+    chunks_lua = "{" + ",".join(f"[{s}]={'{' + ','.join(map(str, c[0])) + '}'}" for s, c in state_map.items()) + "}"
+    trans_lua = "{" + ",".join(f"[{s}]={c[1]}" for s, c in state_map.items()) + "}"
+    start_state = chunk_states[0]
+
+    # 4. Randomized Identifiers
     v_env = random_id("Env")
+    v_loader = random_id("Ld")
     v_char = random_id("Chr")
     v_concat = random_id("Cat")
     v_bxor = random_id("Bx")
     v_rol = random_id("Rl")
-    v_consts = random_id("K")
-    v_insts = random_id("I")
-    v_regs = random_id("R")
-    v_pc = random_id("PC")
-    v_clean = random_id("Cln")
+    v_chunks = random_id("Data")
+    v_trans = random_id("Tr")
+    v_state = random_id("St")
+    v_out = random_id("Out")
+    v_idx = random_id("Idx")
     v_seed = random_id("Sd")
+    v_mult = random_id("M")
+    v_inc = random_id("C")
     v_shift = random_id("Sh")
     v_mask = random_id("Mk")
-    v_decode = random_id("Dec")
+    v_clean = random_id("Cln")
+    v_res = random_id("Res")
+    v_err = random_id("Err")
+    v_t0 = random_id("T0")
 
-    # Custom Register VM Interpreter Stub
-    lua_stub = f"""--[[ Classicfuscator v8 Register Bytecode VM ]]--
+    # 5. Hardened Custom VM Stub
+    lua_stub = f"""--[[ Classicfuscator v8.5 Enterprise VM ]]--
 return (function(...)
     local {v_env} = (getgenv and getgenv()) or _ENV or _G
+    local {v_loader} = {v_env}.loadstring or load
+
+    if type({v_loader}) ~= "function" then
+        return
+    end
+
     local {v_char} = string.char
     local {v_concat} = table.concat
 
@@ -143,17 +132,35 @@ return (function(...)
         local _pcall = pcall
         local _getfenv = getfenv
         local _debug_info = (debug and debug.info)
+        local _islclosure = islclosure
         local _isfunctionhooked = isfunctionhooked
 
-        if _isfunctionhooked and _isfunctionhooked(getfenv) then return false end
+        if _isfunctionhooked and _isfunctionhooked({v_loader}) then return false end
+        if _islclosure and _islclosure({v_loader}) then return false end
         if _debug_info then
-            local src = _debug_info(getfenv, "s")
+            local src = _debug_info({v_loader}, "s")
             if src and src ~= "[C]" and src ~= "=[C]" then return false end
+        end
+
+        if _getfenv and _pcall then
+            local local_env = _getfenv(1)
+            for lvl = 0, 12 do
+                local ok, env = _pcall(_getfenv, lvl)
+                if ok and env and env ~= local_env then
+                    for k in pairs(env) do
+                        if k == "hookfunction" or k == "hookmetamethod" or k == "replaceclosure" then
+                            return false
+                        end
+                    end
+                end
+            end
         end
         return true
     end)()
 
-    if not {v_clean} then return (function() end)() end
+    if not {v_clean} then
+        return (function() end)() -- Quietly trap execution if hooked
+    end
     {v_clean} = nil
 
     -- Safe Bitwise XOR Engine
@@ -176,56 +183,59 @@ return (function(...)
         return (l + r) % 256
     end
 
-    -- Constant Decryption
+    -- Cryptographic VM Seed Keys
     local {v_seed} = {k_seed}
+    local {v_mult} = {k_mult}
+    local {v_inc} = {k_inc}
     local {v_shift} = {k_shift}
     local {v_mask} = {k_mask}
-    local {v_consts} = {const_lua}
-    local {v_insts} = {inst_lua}
 
-    local function {v_decode}(idx)
-        local raw = {v_consts}[idx + 1]
-        if not raw then return nil end
-        local out = {{}}
-        local key = ({v_seed} + idx * 19) % 256
-        for b_idx = 1, #raw do
-            key = (key * 13 + 41 + (b_idx - 1)) % 256
-            local step1 = {v_bxor}(raw[b_idx], {v_mask})
-            local step2 = {v_bxor}(step1, key)
-            out[#out + 1] = {v_char}({v_rol}(step2, {v_shift}))
+    local {v_chunks} = {chunks_lua}
+    local {v_trans} = {trans_lua}
+    local {v_state} = {start_state}
+    local {v_out} = {{}}
+    local {v_idx} = 0
+    local {v_t0} = (os and os.clock and os.clock()) or 0
+
+    -- Control-Flow Flattened Execution Loop
+    while {v_state} ~= 0 do
+        if os and os.clock and (os.clock() - {v_t0} > 10.0) then
+            return -- Abort if thread paused by debugger
         end
-        return {v_concat}(out)
+
+        local chunk = {v_chunks}[{v_state}]
+        if not chunk then break end
+
+        for b_idx = 1, #chunk do
+            {v_seed} = ({v_seed} * {v_mult} + {v_inc} + {v_idx} * 13) % 256
+            local raw = chunk[b_idx]
+            local pos_key = ({v_idx} * 7 + 13) % 256
+
+            local step1 = {v_bxor}(raw, pos_key)
+            local step2 = {v_bxor}(step1, {v_mask})
+            local step3 = {v_bxor}(step2, {v_seed})
+            local unrotated = {v_rol}(step3, {v_shift})
+
+            {v_out}[#{v_out} + 1] = {v_char}(unrotated)
+            {v_idx} = {v_idx} + 1
+        end
+
+        {v_state} = {v_trans}[{v_state}] or 0
     end
 
-    -- Virtual Machine Registers
-    local {v_regs} = {{}}
-    local {v_pc} = 1
+    local payload_str = {v_concat}({v_out})
+    {v_out} = nil
+    {v_chunks} = nil
+    {v_trans} = nil
+    if collectgarbage then collectgarbage("step") end
 
-    -- Register Instruction Loop (No loadstring used)
-    while {v_pc} <= #{v_insts} do
-        local inst = {v_insts}[{v_pc}]
-        local op = inst[1]
+    local {v_res}, {v_err} = {v_loader}(payload_str, "=[ClassicfuscatorVM]")
+    payload_str = nil
 
-        if op == 1 then     -- OP_LOADK [Reg, ConstIdx]
-            {v_regs}[inst[2]] = {v_decode}(inst[3])
-        elseif op == 2 then -- OP_GETGLOBAL [Reg, ConstIdx]
-            local g_name = {v_decode}(inst[3])
-            {v_regs}[inst[2]] = {v_env}[g_name]
-        elseif op == 3 then -- OP_SETGLOBAL [Reg, ConstIdx]
-            local g_name = {v_decode}(inst[3])
-            {v_env}[g_name] = {v_regs}[inst[2]]
-        elseif op == 4 then -- OP_CALL [FuncReg, ArgCount]
-            local func = {v_regs}[inst[2]]
-            local args = {{}}
-            for a = 1, inst[3] do
-                args[a] = {v_regs}[a]
-            end
-            if type(func) == "function" then
-                func(unpack(args))
-            end
-        end
-
-        {v_pc} = {v_pc} + 1
+    if type({v_res}) == "function" then
+        return {v_res}(...)
+    else
+        error("[Classicfuscator] Syntax Error in Payload: " .. tostring({v_err}), 0)
     end
 end)(...)"""
 
@@ -237,7 +247,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Classicfuscator Enterprise</title>
+    <title>Classicfuscator</title>
     <style>
         * { box-sizing: border-box; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }
         body { 
@@ -423,7 +433,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             const loaderArea = document.getElementById('loaderOutput');
             
             outputWrapper.style.display = "block";
-            loaderArea.value = "-- Compiling Binary Bytecode VM...";
+            loaderArea.value = "-- Compiling State Machine VM...";
 
             try {
                 const response = await fetch('/obfuscate', {
@@ -516,7 +526,7 @@ def process():
     # Generate dynamic 32-character Hex Token
     token = uuid.uuid4().hex
     
-    # Compile with Register Bytecode VM
+    # Compile with State Machine VM + String Byte Encoding
     obfuscated_code = obfuscate_lua(raw_code, token)
     
     # Store in RAM Cache
@@ -542,6 +552,14 @@ def process():
         "loader": loader_script,
         "token": token
     })
+
+
+@app.route("/verify/<token>", methods=["POST"])
+def verify_session(token):
+    """Server-side authorization endpoint."""
+    if token in SCRIPT_CACHE and SCRIPT_CACHE[token].get("active"):
+        return jsonify({"valid": True})
+    return jsonify({"valid": False}), 403
 
 
 @app.route("/raw/<token>", methods=["GET"])
