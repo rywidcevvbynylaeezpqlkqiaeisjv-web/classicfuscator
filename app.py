@@ -32,7 +32,7 @@ def gen_id(prefix="", length=random.randint(16, 24)):
     return prefix + "".join(random.choices(["I", "l", "1", "_"], k=length))
 
 # ==============================================================================
-# 1. CORE VM GENERATOR & POLYMORPHISM
+# 1. CORE VM GENERATOR & POLYMORPHISM (MOBILE SAFE)
 # ==============================================================================
 
 def encode_payload(lua_code):
@@ -53,14 +53,8 @@ def encode_payload(lua_code):
 def generate_junk_instruction():
     """Generates mathematically sound junk code."""
     v = gen_id()
-    val = random.randint(100, 999)
-    junk_types = [
-        f"local {v} = {val}; {v} = ({v} * 2) - {val};",
-        f"if math.abs(math.cos(math.pi)) == -1 then return end;",
-        f"local {v} = tostring({val}); if #{v} > 10 then while true do end end;",
-        f"(function() local {v} = {val}; return {v} end)();"
-    ]
-    return random.choice(junk_types)
+    val = random.randint(10, 99)
+    return f"local {v} = {val}; {v} = ({v} * 2) - {val};"
 
 def build_enterprise_vm(raw_code, settings):
     packed_blob, xor_seed = encode_payload(raw_code)
@@ -83,15 +77,20 @@ def build_enterprise_vm(raw_code, settings):
         local function {v_anti}()
             local _ts = tostring
             local _type = type
-            local _grm = getrawmetatable or function() return false end
             
-            if iscclosure and not iscclosure(print) then while true do end end
+            -- Safe Environment Checks for Mobile
+            if type(iscclosure) == "function" then
+                if not iscclosure(print) then while true do end end
+            end
             
-            local s, mt = pcall(function() return _grm(game) end)
-            if s and mt and _type(mt) == "table" then
-                local nc = rawget(mt, "__namecall")
-                if nc and _type(nc) == "function" and _ts(nc):find("hook") then
-                    return false
+            local _grm = type(getrawmetatable) == "function" and getrawmetatable or nil
+            if _grm then
+                local s, mt = pcall(function() return _grm(game) end)
+                if s and mt and _type(mt) == "table" then
+                    local nc = rawget(mt, "__namecall")
+                    if nc and _type(nc) == "function" and _ts(nc):find("hook") then
+                        return false
+                    end
                 end
             end
             return true
@@ -109,12 +108,12 @@ local function __ENTERPRISE_INIT(...)
     
     local {v_env} = setmetatable({{}}, {{
         __index = function(_, k) 
-            local g = getgenv and getgenv() or _G or {{}}
-            local f = getfenv(0) or {{}}
+            local g = type(getgenv) == "function" and getgenv() or _G or {{}}
+            local f = type(getfenv) == "function" and getfenv(0) or {{}}
             return g[k] or f[k]
         end,
         __newindex = function(_, k, v) 
-            local g = getgenv and getgenv() or getfenv(0)
+            local g = type(getgenv) == "function" and getgenv() or nil
             if g then g[k] = v end
         end,
         __metatable = "LOCKED_ENV"
@@ -129,15 +128,18 @@ local function __ENTERPRISE_INIT(...)
     local {v_byte} = string.byte
     local {v_char} = string.char
     
-    -- Mobile Executor Safe Loadstring Fetch
+    -- Bulletproof Loadstring Fetcher
     local {v_loader} = nil
-    if getgenv and getgenv()["\108\111\97\100\115\116\114\105\110\103"] then 
-        {v_loader} = getgenv()["\108\111\97\100\115\116\114\105\110\103"] 
+    if type(getgenv) == "function" then
+        local g = getgenv()
+        if type(g) == "table" and type(g.loadstring) == "function" then 
+            {v_loader} = g.loadstring 
+        end
     end
-    if not {v_loader} and loadstring then {v_loader} = loadstring end
-    if not {v_loader} and load then {v_loader} = load end
+    if not {v_loader} and type(loadstring) == "function" then {v_loader} = loadstring end
+    if not {v_loader} and type(load) == "function" then {v_loader} = load end
     
-    if type({v_loader}) ~= "function" then return warn("Executor Missing Loadstring") end
+    if type({v_loader}) ~= "function" then return warn("[Classicfuscator] Executor Missing Loadstring") end
 
     local {v_dispatch} = {{
         [{s_init}] = function()
@@ -153,9 +155,21 @@ local function __ENTERPRISE_INIT(...)
         end,
         [{s_decrypt}] = function()
             local enc = {v_byte}({v_blob}, {v_pc}, {v_pc})
-            local dec = bit32 and bit32.bxor(enc, {v_key}) or (function(a,b)
-                local r,p=0,1; while a>0 or b>0 do if a%2 ~= b%2 then r=r+p end; a,b,p=math.floor(a/2),math.floor(b/2),p*2 end return r
-            end)(enc, {v_key})
+            local dec
+            
+            -- Mobile Safe Bitwise XOR
+            if type(bit32) == "table" and type(bit32.bxor) == "function" then
+                dec = bit32.bxor(enc, {v_key})
+            elseif type(bit) == "table" and type(bit.bxor) == "function" then
+                dec = bit.bxor(enc, {v_key})
+            else
+                local a, b, r, p = enc, {v_key}, 0, 1
+                while a > 0 or b > 0 do
+                    if a % 2 ~= b % 2 then r = r + p end
+                    a, b, p = math.floor(a / 2), math.floor(b / 2), p * 2
+                end
+                dec = r
+            end
             
             {v_buf}[#{v_buf}+1] = {v_char}(dec)
             {v_key} = ({v_key} + enc + 13) % 256
@@ -170,20 +184,27 @@ local function __ENTERPRISE_INIT(...)
             local func, err = {v_loader}(chunk)
             chunk = string.rep("0", #chunk) 
             
-            if func then
-                if setfenv then pcall(setfenv, func, {v_env}) end
+            if type(func) == "function" then
+                if type(setfenv) == "function" then pcall(setfenv, func, {v_env}) end
                 {v_buf}[1] = func
                 {v_state} = {s_exec}
             else
-                warn(err)
+                warn("[Classicfuscator Compile Error] " .. tostring(err))
                 {v_state} = 0
             end
         end,
         [{s_exec}] = function()
             local f = {v_buf}[1]
             {v_buf}[1] = nil
-            local ok, err = coroutine.resume(coroutine.create(f))
-            if not ok then warn(err) end
+            
+            if type(coroutine) == "table" and type(coroutine.create) == "function" then
+                local ok, err = coroutine.resume(coroutine.create(f))
+                if not ok then warn(err) end
+            else
+                local ok, err = pcall(f)
+                if not ok then warn(err) end
+            end
+            
             {v_state} = 0
         end
     }}
@@ -198,29 +219,50 @@ return pcall(__ENTERPRISE_INIT)
 """
     b64_final = base64.b64encode(vm_lua.strip().encode('utf-8')).decode('utf-8')
     wrapper = f"""
-local ls = nil
-if getgenv and getgenv().loadstring then ls = getgenv().loadstring end
-if not ls and loadstring then ls = loadstring end
-if not ls and load then ls = load end
-if type(ls) ~= "function" then return warn("Executor does not support loadstring") end
+-- Classicfuscator Enterprise Load Pipeline (Mobile Safe)
+local Ls = nil
+if type(getgenv) == "function" then
+    local env = getgenv()
+    if type(env) == "table" and type(env.loadstring) == "function" then Ls = env.loadstring end
+end
+if not Ls and type(loadstring) == "function" then Ls = loadstring end
+if not Ls and type(load) == "function" then Ls = load end
+if type(Ls) ~= "function" then return warn("[Classicfuscator] Executor does not support loadstring") end
 
-local d = "{b64_final}"
-local step1 = d:gsub('.', function(x)
-    if x == '=' then return '' end
-    local r,f='', ('ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/':find(x)-1)
-    for i=6,1,-1 do r=r..(f%2^i-f%2^(i-1)>0 and '1' or '0') end return r;
-end)
-local step2 = step1:gsub('%d%d%d?%d?%d?%d?%d?%d?', function(x)
-    if (#x ~= 8) then return '' end
-    local c=0; for i=1,8 do c=c+(x:sub(i,i)=='1' and 2^(8-i) or 0) end
-    return string.char(c)
-end)
+-- Pure Math Base64 Decoder (Bypasses broken string.gsub on Mobile)
+local function dec_b64(data)
+    local b = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/'
+    data = string.gsub(data, '[^'..b..'=]', '')
+    local res = {{}}
+    for i = 1, #data, 4 do
+        local n = 0
+        for j = 0, 3 do
+            local c = string.sub(data, i+j, i+j)
+            if c ~= '=' then
+                local p = string.find(b, c)
+                if p then n = n + (p - 1) * (64 ^ (3 - j)) end
+            end
+        end
+        for j = 2, 0, -1 do
+            if string.sub(data, i + 3 - j, i + 3 - j) ~= '=' then
+                table.insert(res, string.char(math.floor(n / (256 ^ j)) % 256))
+            end
+        end
+    end
+    return table.concat(res)
+end
 
-local f, err = ls(step2)
+local encoded_payload = "{b64_final}"
+local decoded_payload = dec_b64(encoded_payload)
+encoded_payload = "" -- Memory clean
+
+local f, err = Ls(decoded_payload)
+decoded_payload = "" -- Memory clean
+
 if type(f) == "function" then
     return f()
 else
-    warn(err)
+    warn("[Classicfuscator Error] " .. tostring(err))
 end
 """
     return wrapper.strip()
@@ -237,208 +279,41 @@ HTML_TEMPLATE = """<!DOCTYPE html>
     <title>Classicfuscator Enterprise</title>
     <style>
         * { box-sizing: border-box; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }
-        body { 
-            background-color: #f2f4f8; 
-            color: #1e293b; 
-            margin: 0; 
-            padding: 40px 20px; 
-            display: flex; 
-            justify-content: center; 
-            align-items: center; 
-            min-height: 100vh; 
-        }
-        .card { 
-            background: #ffffff; 
-            border-radius: 20px; 
-            box-shadow: 0 4px 20px rgba(0, 0, 0, 0.03); 
-            width: 100%; 
-            max-width: 560px; 
-            padding: 36px 32px; 
-            border: 1px solid #eef0f4; 
-        }
-        h1 { 
-            font-size: 28px; 
-            font-weight: 700; 
-            color: #1a1a1a; 
-            margin: 0 0 20px 0; 
-            letter-spacing: -0.3px;
-        }
+        body { background-color: #f2f4f8; color: #1e293b; margin: 0; padding: 40px 20px; display: flex; justify-content: center; align-items: center; min-height: 100vh; }
+        .card { background: #ffffff; border-radius: 20px; box-shadow: 0 4px 20px rgba(0, 0, 0, 0.03); width: 100%; max-width: 560px; padding: 36px 32px; border: 1px solid #eef0f4; }
+        h1 { font-size: 28px; font-weight: 700; color: #1a1a1a; margin: 0 0 20px 0; letter-spacing: -0.3px; }
         
-        .tab-nav {
-            display: flex;
-            gap: 8px;
-            background: #f1f5f9;
-            padding: 4px;
-            border-radius: 12px;
-            margin-bottom: 24px;
-        }
-        .tab-btn {
-            flex: 1;
-            padding: 10px 16px;
-            border: none;
-            background: transparent;
-            color: #64748b;
-            font-size: 14px;
-            font-weight: 600;
-            border-radius: 8px;
-            cursor: pointer;
-            transition: all 0.2s ease;
-        }
-        .tab-btn.active {
-            background: #ffffff;
-            color: #0070f3;
-            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.06);
-        }
-
+        .tab-nav { display: flex; gap: 8px; background: #f1f5f9; padding: 4px; border-radius: 12px; margin-bottom: 24px; }
+        .tab-btn { flex: 1; padding: 10px 16px; border: none; background: transparent; color: #64748b; font-size: 14px; font-weight: 600; border-radius: 8px; cursor: pointer; transition: all 0.2s ease; }
+        .tab-btn.active { background: #ffffff; color: #0070f3; box-shadow: 0 2px 8px rgba(0, 0, 0, 0.06); }
         .tab-content { display: none; }
         .tab-content.active { display: block; }
 
-        .file-upload-box {
-            border: 2px dashed #0070f3;
-            border-radius: 12px;
-            padding: 22px 20px;
-            background-color: #ffffff;
-            margin-bottom: 18px;
-            text-align: center;
-            cursor: pointer;
-            transition: all 0.2s ease;
-        }
-        .file-upload-box:hover, .file-upload-box.drag-over {
-            background-color: #f0f7ff;
-            border-color: #0052cc;
-        }
-        .file-upload-title {
-            font-size: 15px;
-            font-weight: 700;
-            color: #1a1a1a;
-            margin-bottom: 4px;
-            display: block;
-        }
-        .file-upload-subtext {
-            font-size: 13px;
-            color: #64748b;
-            margin: 0;
-        }
-        .or-text {
-            font-size: 14px;
-            font-weight: 500;
-            color: #1e293b;
-            margin-bottom: 10px;
-        }
-        textarea { 
-            width: 100%; 
-            height: 160px;
-            border: 1px solid #dcdfe6; 
-            border-radius: 12px; 
-            padding: 14px; 
-            font-size: 13.5px; 
-            font-family: monospace;
-            outline: none; 
-            background-color: #ffffff; 
-            color: #1e293b; 
-            transition: border-color 0.2s ease, box-shadow 0.2s ease;
-            resize: vertical;
-        }
-        textarea:focus { 
-            border-color: #0070f3; 
-            box-shadow: 0 0 0 3px rgba(0, 112, 243, 0.12);
-        }
-        .btn { 
-            width: 100%; 
-            padding: 14px; 
-            background-color: #0070f3; 
-            color: #ffffff; 
-            border: none; 
-            border-radius: 12px; 
-            font-size: 15px; 
-            font-weight: 600; 
-            cursor: pointer; 
-            margin-top: 18px; 
-            transition: background-color 0.2s ease;
-            box-shadow: 0 4px 12px rgba(0, 112, 243, 0.2);
-        }
+        .file-upload-box { border: 2px dashed #0070f3; border-radius: 12px; padding: 22px 20px; background-color: #ffffff; margin-bottom: 18px; text-align: center; cursor: pointer; transition: all 0.2s ease; }
+        .file-upload-box:hover { background-color: #f0f7ff; border-color: #0052cc; }
+        .file-upload-title { font-size: 15px; font-weight: 700; color: #1a1a1a; margin-bottom: 4px; display: block; }
+        .file-upload-subtext { font-size: 13px; color: #64748b; margin: 0; }
+        .or-text { font-size: 14px; font-weight: 500; color: #1e293b; margin-bottom: 10px; }
+        
+        textarea { width: 100%; height: 160px; border: 1px solid #dcdfe6; border-radius: 12px; padding: 14px; font-size: 13.5px; font-family: monospace; outline: none; background-color: #ffffff; color: #1e293b; transition: border-color 0.2s ease; resize: vertical; }
+        textarea:focus { border-color: #0070f3; box-shadow: 0 0 0 3px rgba(0, 112, 243, 0.12); }
+        
+        .btn { width: 100%; padding: 14px; background-color: #0070f3; color: #ffffff; border: none; border-radius: 12px; font-size: 15px; font-weight: 600; cursor: pointer; margin-top: 18px; transition: background-color 0.2s ease; box-shadow: 0 4px 12px rgba(0, 112, 243, 0.2); }
         .btn:hover { background-color: #005bb5; }
         
         .output-container { margin-top: 22px; display: none; }
-        .loader-box { 
-            background: #f8fafc; 
-            border: 1px solid #e2e8f0; 
-            border-radius: 12px; 
-            padding: 14px; 
-        }
-        .section-label { 
-            font-size: 13px; 
-            font-weight: 600; 
-            color: #0070f3; 
-            margin-bottom: 8px; 
-            display: block; 
-        }
-        .loader-text {
-            width: 100%;
-            height: 48px;
-            background: #ffffff;
-            border: 1px solid #dcdfe6;
-            border-radius: 8px;
-            color: #1e293b;
-            font-family: monospace;
-            font-size: 12.5px;
-            padding: 12px;
-            white-space: nowrap;
-            overflow-x: auto;
-            resize: none;
-        }
+        .loader-box { background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 12px; padding: 14px; }
+        .section-label { font-size: 13px; font-weight: 600; color: #0070f3; margin-bottom: 8px; display: block; }
+        .loader-text { width: 100%; height: 48px; background: #ffffff; border: 1px solid #dcdfe6; border-radius: 8px; color: #1e293b; font-family: monospace; font-size: 12.5px; padding: 12px; white-space: nowrap; overflow-x: auto; resize: none; }
 
-        .setting-group {
-            margin-bottom: 18px;
-            background: #f8fafc;
-            padding: 14px 16px;
-            border-radius: 12px;
-            border: 1px solid #eef2f6;
-        }
-        .setting-header {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-        }
-        .setting-title {
-            font-size: 14px;
-            font-weight: 600;
-            color: #1e293b;
-        }
-        .setting-desc {
-            font-size: 12px;
-            color: #64748b;
-            margin-top: 4px;
-        }
-        .setting-select, .setting-input {
-            padding: 8px 12px;
-            border: 1px solid #cbd5e1;
-            border-radius: 8px;
-            font-size: 13px;
-            outline: none;
-            background: #ffffff;
-            color: #1e293b;
-        }
+        .setting-group { margin-bottom: 18px; background: #f8fafc; padding: 14px 16px; border-radius: 12px; border: 1px solid #eef2f6; display: flex; justify-content: space-between; align-items: center; }
+        .setting-title { font-size: 14px; font-weight: 600; color: #1e293b; }
+        .setting-desc { font-size: 12px; color: #64748b; margin-top: 4px; }
         
-        .switch {
-            position: relative;
-            display: inline-block;
-            width: 44px;
-            height: 24px;
-        }
+        .switch { position: relative; display: inline-block; width: 44px; height: 24px; }
         .switch input { opacity: 0; width: 0; height: 0; }
-        .slider {
-            position: absolute; cursor: pointer; top: 0; left: 0; right: 0; bottom: 0;
-            background-color: #cbd5e1;
-            transition: .3s;
-            border-radius: 24px;
-        }
-        .slider:before {
-            position: absolute; content: ""; height: 18px; width: 18px; left: 3px; bottom: 3px;
-            background-color: white;
-            transition: .3s;
-            border-radius: 50%;
-        }
+        .slider { position: absolute; cursor: pointer; top: 0; left: 0; right: 0; bottom: 0; background-color: #cbd5e1; transition: .3s; border-radius: 24px; }
+        .slider:before { position: absolute; content: ""; height: 18px; width: 18px; left: 3px; bottom: 3px; background-color: white; transition: .3s; border-radius: 50%; }
         input:checked + .slider { background-color: #0070f3; }
         input:checked + .slider:before { transform: translateX(20px); }
     </style>
@@ -475,31 +350,19 @@ HTML_TEMPLATE = """<!DOCTYPE html>
 
         <div id="settingsTab" class="tab-content">
             <div class="setting-group">
-                <div class="setting-header">
-                    <div>
-                        <div class="setting-title">Polymorphic VM Structure</div>
-                        <div class="setting-desc">Automatically enabled in Enterprise build.</div>
-                    </div>
-                    <label class="switch"><input type="checkbox" checked disabled><span class="slider"></span></label>
+                <div>
+                    <div class="setting-title">Polymorphic VM Structure</div>
+                    <div class="setting-desc">Automatically enabled in Enterprise build.</div>
                 </div>
+                <label class="switch"><input type="checkbox" checked disabled><span class="slider"></span></label>
             </div>
 
             <div class="setting-group">
-                <div class="setting-header">
-                    <div>
-                        <div class="setting-title">Anti-Hook & Sentinel Matrix</div>
-                        <div class="setting-desc">Inspects callstack, C-closures, and catches hooks.</div>
-                    </div>
-                    <label class="switch">
-                        <input type="checkbox" id="cfgAntiHook" checked>
-                        <span class="slider"></span>
-                    </label>
+                <div>
+                    <div class="setting-title">Anti-Hook & Sentinel Matrix</div>
+                    <div class="setting-desc">Safely checks environment to prevent dumping.</div>
                 </div>
-            </div>
-
-            <div class="setting-group">
-                <div class="setting-title" style="margin-bottom: 6px;">Custom Watermark Header</div>
-                <input type="text" id="cfgWatermark" class="setting-input" style="width: 100%;" placeholder="e.g. Classicfuscator Enterprise">
+                <label class="switch"><input type="checkbox" id="cfgAntiHook" checked><span class="slider"></span></label>
             </div>
         </div>
     </div>
@@ -530,17 +393,14 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             const loaderArea = document.getElementById('loaderOutput');
             const submitBtn = document.getElementById('submitBtn');
             
-            if (!inputCode.trim()) {
-                return;
-            }
+            if (!inputCode.trim()) return;
 
             const settings = {
-                antihook: document.getElementById('cfgAntiHook').checked,
-                watermark: document.getElementById('cfgWatermark').value
+                antihook: document.getElementById('cfgAntiHook').checked
             };
 
             outputWrapper.style.display = "block";
-            loaderArea.value = "-- Validating syntax & compiling Polymorphic VM...";
+            loaderArea.value = "-- Compiling Polymorphic VM...";
             submitBtn.innerText = "Processing...";
 
             try {
@@ -554,7 +414,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
                 if (response.ok && data.loader) {
                     loaderArea.value = data.loader;
                 } else {
-                    loaderArea.value = "-- " + (data.error || "Syntax error detected.");
+                    loaderArea.value = "-- Error: " + (data.error || "Compilation failed.");
                 }
             } catch (err) {
                 loaderArea.value = "-- Network error: Could not connect to server.";
@@ -565,11 +425,10 @@ HTML_TEMPLATE = """<!DOCTYPE html>
 
         function copyLoader() {
             const loaderArea = document.getElementById('loaderOutput');
-            const copyBtn = document.getElementById('copyBtn');
             loaderArea.select();
             navigator.clipboard.writeText(loaderArea.value);
-            copyBtn.innerText = "Copied to Clipboard!";
-            setTimeout(() => { copyBtn.innerText = "Copy Loader"; }, 2000);
+            document.getElementById('copyBtn').innerText = "Copied to Clipboard!";
+            setTimeout(() => { document.getElementById('copyBtn').innerText = "Copy Loader"; }, 2000);
         }
     </script>
 </body>
