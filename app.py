@@ -12,10 +12,10 @@ from werkzeug.middleware.proxy_fix import ProxyFix
 app = Flask(__name__)
 app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1, x_prefix=1)
 
-# Set custom domain for Render (auto-detects if left empty)
+# Render Custom Domain (auto-detects if left blank)
 CUSTOM_DOMAIN = "https://classicfuscator.onrender.com"
 
-# Persistent Storage Paths
+# Persistent Storage
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 SAVED_DIR = os.path.join(BASE_DIR, "saved_scripts")
 DB_PATH = os.path.join(BASE_DIR, "database.db")
@@ -25,7 +25,6 @@ SCRIPT_CACHE = {}
 
 
 def init_db():
-    """Initializes SQLite database to persist tokens across server restarts."""
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
     c.execute(
@@ -40,25 +39,23 @@ init_db()
 
 
 def random_id(prefix=""):
-    """Generates homoglyph-style confusing variable names."""
     chars = ["I", "l", "1", "_"]
     body = "".join(random.choices(chars, k=random.randint(18, 26)))
     return f"{prefix}_{body}"
 
 
 def ror(val, count, bits=8):
-    """Rotate Right for 8-bit integer."""
     return ((val >> count) | (val << (bits - count))) & 0xFF
 
 
 # ==============================================================================
-# 1. AST-LEVEL LEXER & CONSTANT TRANSFORMER
+# 1. FIXED AST-LEVEL LEXER & CONSTANT TRANSFORMER
 # ==============================================================================
 
 TOKEN_SPEC = [
-    ("COMMENT_LONG", r"--\[(=*)\[[\s\S]*?\]\1\]"),
+    ("COMMENT_LONG", r"--\[\[[\s\S]*?\]\]|--\[=\[[\s\S]*?\]=\]|--\[==\[[\s\S]*?\]==\]"),
     ("COMMENT_SHORT", r"--[^\n]*"),
-    ("STRING_LONG", r"\[(=*)\[[\s\S]*?\]\1\]"),
+    ("STRING_LONG", r"\[\[[\s\S]*?\]\]|\[=\[[\s\S]*?\]=\]|\[==\[[\s\S]*?\]==\]"),
     ("STRING_SQ", r"'([^'\\]|\\.)*'"),
     ("STRING_DQ", r'"([^"\\]|\\.)*"'),
     ("NUMBER_HEX", r"0[xX][0-9a-fA-F]+"),
@@ -71,7 +68,6 @@ TOKEN_REGEX = re.compile("|".join(f"(?P<{name}>{pattern})" for name, pattern in 
 
 
 def transform_number(num_str: str) -> str:
-    """Mutates numeric constants into algebraic and bitwise expressions."""
     try:
         if num_str.lower().startswith("0x"):
             val = int(num_str, 16)
@@ -100,7 +96,6 @@ def transform_number(num_str: str) -> str:
 
 
 def transform_string(str_val: str, dec_func_name: str) -> str:
-    """Encrypts string literals and replaces them with dynamic decryptor calls."""
     if (str_val.startswith('"') and str_val.endswith('"')) or (str_val.startswith("'") and str_val.endswith("'")):
         inner = str_val[1:-1]
         try:
@@ -120,9 +115,7 @@ def transform_string(str_val: str, dec_func_name: str) -> str:
 
 
 def ast_obfuscate(lua_code: str, dec_func_name: str) -> str:
-    """Pre-processes code to encrypt all strings and mutate numbers before VM compilation."""
     output_tokens = []
-    
     for match in TOKEN_REGEX.finditer(lua_code):
         kind = match.lastgroup
         val = match.group()
@@ -150,11 +143,8 @@ def obfuscate_lua(code: str, token: str) -> str:
         return "print('[Classicfuscator] Empty script executed.')"
 
     v_dec = random_id("Dec")
-    
-    # Stage 1: AST Tokenization & String Virtualization
     ast_transformed = ast_obfuscate(code, v_dec)
 
-    # Stage 2: Binary Rolling Key State Machine
     raw_bytes = list(ast_transformed.encode("utf-8"))
     k_seed = random.randint(100000, 999999)
     k_mult = random.randint(5, 29) * 2 + 1
@@ -187,7 +177,6 @@ def obfuscate_lua(code: str, token: str) -> str:
     trans_lua = "{" + ",".join(f"[{s}]={c[1]}" for s, c in state_map.items()) + "}"
     start_state = chunk_states[0] if chunk_states else 0
 
-    # Stage 3: Randomized VM Variables
     v_env = random_id("Env")
     v_loader = random_id("Ld")
     v_char = random_id("Chr")
@@ -213,7 +202,6 @@ def obfuscate_lua(code: str, token: str) -> str:
 return (function(...)
     local {v_genv} = (getgenv and getgenv()) or _ENV or _G
 
-    -- Anti-Hook & Callstack Sentinel
     local function {v_anti}()
         if debug and (debug.info or debug.getinfo) then
             local get_i = debug.info or debug.getinfo
@@ -255,7 +243,6 @@ return (function(...)
         return (l + r) % 256
     end
 
-    -- Embedded String Decryptor
     {v_genv}.{v_dec} = function(bytes, k)
         local t = {{}}
         for i = 1, #bytes do
@@ -325,112 +312,26 @@ HTML_TEMPLATE = """<!DOCTYPE html>
     <title>Classicfuscator Enterprise</title>
     <style>
         * { box-sizing: border-box; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
-        body { 
-            background-color: #0b0f19; 
-            color: #f1f5f9; 
-            margin: 0; 
-            padding: 40px 20px; 
-            display: flex; 
-            justify-content: center; 
-            align-items: center; 
-            min-height: 100vh; 
-        }
-        .card { 
-            background: #111827; 
-            border-radius: 16px; 
-            box-shadow: 0 10px 40px rgba(0, 0, 0, 0.6); 
-            width: 100%; 
-            max-width: 560px; 
-            padding: 32px; 
-            border: 1px solid #1f2937; 
-        }
-        h1 { 
-            font-size: 24px; 
-            font-weight: 700; 
-            color: #38bdf8; 
-            margin: 0 0 6px 0; 
-            letter-spacing: -0.5px;
-        }
-        .subtitle { 
-            font-size: 13px; 
-            color: #94a3b8; 
-            margin-bottom: 20px; 
-        }
-        textarea { 
-            width: 100%; 
-            height: 160px; 
-            border: 1px solid #374151; 
-            border-radius: 10px; 
-            padding: 14px; 
-            font-size: 13px; 
-            font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; 
-            outline: none; 
-            background-color: #030712; 
-            color: #38bdf8; 
-            resize: vertical; 
-            transition: border-color 0.2s;
-        }
+        body { background-color: #0b0f19; color: #f1f5f9; margin: 0; padding: 40px 20px; display: flex; justify-content: center; align-items: center; min-height: 100vh; }
+        .card { background: #111827; border-radius: 16px; box-shadow: 0 10px 40px rgba(0, 0, 0, 0.6); width: 100%; max-width: 560px; padding: 32px; border: 1px solid #1f2937; }
+        h1 { font-size: 24px; font-weight: 700; color: #38bdf8; margin: 0 0 6px 0; letter-spacing: -0.5px; }
+        .subtitle { font-size: 13px; color: #94a3b8; margin-bottom: 20px; }
+        textarea { width: 100%; height: 160px; border: 1px solid #374151; border-radius: 10px; padding: 14px; font-size: 13px; font-family: monospace; outline: none; background-color: #030712; color: #38bdf8; resize: vertical; }
         textarea:focus { border-color: #0284c7; }
-        .btn { 
-            width: 100%; 
-            padding: 13px; 
-            background-color: #0284c7; 
-            color: #ffffff; 
-            border: none; 
-            border-radius: 10px; 
-            font-size: 15px; 
-            font-weight: 600; 
-            cursor: pointer; 
-            margin-top: 16px; 
-            transition: all 0.2s ease; 
-        }
+        .btn { width: 100%; padding: 13px; background-color: #0284c7; color: #ffffff; border: none; border-radius: 10px; font-size: 15px; font-weight: 600; cursor: pointer; margin-top: 16px; }
         .btn:hover { background-color: #0369a1; }
         .output-container { margin-top: 20px; display: none; }
-        .loader-box { 
-            background: #030712; 
-            border: 1px solid #1e293b; 
-            border-radius: 10px; 
-            padding: 14px; 
-        }
-        .section-label { 
-            font-size: 12px; 
-            font-weight: 600; 
-            color: #94a3b8; 
-            text-transform: uppercase; 
-            letter-spacing: 0.5px; 
-            margin-bottom: 8px; 
-            display: block; 
-        }
-        .loader-text {
-            width: 100%;
-            height: 48px;
-            background: #111827;
-            border: 1px solid #374151;
-            border-radius: 8px;
-            color: #38bdf8;
-            font-family: ui-monospace, SFMono-Regular, monospace;
-            font-size: 12.5px;
-            padding: 12px;
-            white-space: nowrap;
-            overflow-x: auto;
-            resize: none;
-        }
-        .copy-btn {
-            background-color: #1f2937;
-            color: #e2e8f0;
-            border: 1px solid #374151;
-            margin-top: 8px;
-        }
-        .copy-btn:hover {
-            background-color: #374151;
-        }
+        .loader-box { background: #030712; border: 1px solid #1e293b; border-radius: 10px; padding: 14px; }
+        .section-label { font-size: 12px; font-weight: 600; color: #94a3b8; text-transform: uppercase; margin-bottom: 8px; display: block; }
+        .loader-text { width: 100%; height: 48px; background: #111827; border: 1px solid #374151; border-radius: 8px; color: #38bdf8; font-family: monospace; font-size: 12.5px; padding: 12px; white-space: nowrap; overflow-x: auto; resize: none; }
+        .copy-btn { background-color: #1f2937; color: #e2e8f0; border: 1px solid #374151; margin-top: 8px; }
+        .copy-btn:hover { background-color: #374151; }
     </style>
 </head>
 <body>
     <div class="card">
         <h1>Classicfuscator</h1>
         <div class="subtitle">AST-Flattening • String Virtualization • Anti-Dump Protection</div>
-
         <textarea id="input" placeholder="print('Hello from Protected Script!')"></textarea>
         <button class="btn" id="submitBtn" onclick="obfuscate()">Obfuscate Script</button>
 
@@ -489,7 +390,7 @@ PROTECTED_HTML_TEMPLATE = """<!DOCTYPE html>
     <title>Protected Script</title>
     <style>
         body { background-color: #0b0f19; color: #f1f5f9; font-family: sans-serif; display: flex; justify-content: center; align-items: center; min-height: 100vh; margin: 0; }
-        .card { background: #111827; padding: 40px; border-radius: 16px; text-align: center; border: 1px solid #1f2937; }
+        .card { background: #111827; padding: 40px; border-radius: 16px; text-align: center; border: 1px solid #374151; }
         h1 { color: #38bdf8; font-size: 20px; margin-bottom: 8px; }
         p { color: #94a3b8; font-size: 14px; margin: 0; }
     </style>
@@ -539,7 +440,6 @@ def process():
     except Exception as e:
         print("DB Save Error:", e)
     
-    # Resolve exact HTTPS domain URL
     if CUSTOM_DOMAIN:
         domain_url = CUSTOM_DOMAIN.rstrip("/")
     else:
@@ -547,7 +447,7 @@ def process():
         if request.headers.get("X-Forwarded-Proto") == "https" or (domain_url.startswith("http://") and not ("127.0.0.1" in domain_url or "localhost" in domain_url)):
             domain_url = domain_url.replace("http://", "https://", 1)
 
-    # Clean 1-Liner Junkie-Style Output
+    # 1-Liner Output
     loader_script = f'loadstring(game:HttpGet("{domain_url}/raw/{token}"))()'
 
     return jsonify({
@@ -561,7 +461,6 @@ def serve_script(token):
     sec_fetch_dest = request.headers.get("Sec-Fetch-Dest", "").lower()
     sec_ch_ua = request.headers.get("Sec-Ch-Ua")
 
-    # Only show HTML landing page to real desktop/mobile browsers navigating directly
     is_human_browser = (sec_fetch_dest == "document" and bool(sec_ch_ua))
     if is_human_browser:
         return render_template_string(PROTECTED_HTML_TEMPLATE)
