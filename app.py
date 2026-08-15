@@ -12,10 +12,10 @@ from werkzeug.middleware.proxy_fix import ProxyFix
 app = Flask(__name__)
 app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1, x_prefix=1)
 
-# Render Custom Domain
+# Render Custom Domain (auto-detects if left blank)
 CUSTOM_DOMAIN = "https://classicfuscator.onrender.com"
 
-# Persistent Storage
+# Persistent Storage Paths
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 SAVED_DIR = os.path.join(BASE_DIR, "saved_scripts")
 DB_PATH = os.path.join(BASE_DIR, "database.db")
@@ -52,8 +52,14 @@ def ror(val, count, bits=8):
 
 
 # ==============================================================================
-# 1. AST-LEVEL LEXER & CONSTANT TRANSFORMER
+# 1. ENTERPRISE AST LEXER, IDENTIFIER SCRAMBLER & CONSTANT MUTATOR
 # ==============================================================================
+
+LUA_KEYWORDS = {
+    "and", "break", "do", "else", "elseif", "end", "false", "for",
+    "function", "if", "in", "local", "nil", "not", "or", "repeat",
+    "return", "then", "true", "until", "while"
+}
 
 TOKEN_SPEC = [
     ("COMMENT_LONG", r"--\[\[[\s\S]*?\]\]|--\[=\[[\s\S]*?\]=\]|--\[==\[[\s\S]*?\]==\]"),
@@ -71,6 +77,7 @@ TOKEN_REGEX = re.compile("|".join(f"(?P<{name}>{pattern})" for name, pattern in 
 
 
 def transform_number(num_str: str) -> str:
+    """Mutates numeric constants into algebraic and bitwise expressions."""
     try:
         if num_str.lower().startswith("0x"):
             val = int(num_str, 16)
@@ -99,6 +106,7 @@ def transform_number(num_str: str) -> str:
 
 
 def transform_string(str_val: str, dec_func_name: str) -> str:
+    """Encrypts string literals with rolling positional keys."""
     if (str_val.startswith('"') and str_val.endswith('"')) or (str_val.startswith("'") and str_val.endswith("'")):
         inner = str_val[1:-1]
         try:
@@ -112,33 +120,77 @@ def transform_string(str_val: str, dec_func_name: str) -> str:
 
     raw_bytes = list(inner.encode("utf-8"))
     key = random.randint(1, 255)
-    enc_bytes = [(b ^ key) for b in raw_bytes]
+    mask = random.randint(1, 255)
+    
+    enc_bytes = []
+    for idx, b in enumerate(raw_bytes):
+        pos_k = (key + (idx * 7)) % 256
+        enc_bytes.append((b ^ pos_k ^ mask) % 256)
+        
     bytes_table = "{" + ",".join(map(str, enc_bytes)) + "}"
-    return f"{dec_func_name}({bytes_table}, {key})"
+    return f"{dec_func_name}({bytes_table}, {key}, {mask})"
 
 
 def ast_obfuscate(lua_code: str, dec_func_name: str) -> str:
-    output_tokens = []
+    """Multi-pass AST transformation."""
+    tokens = []
     for match in TOKEN_REGEX.finditer(lua_code):
         kind = match.lastgroup
         val = match.group()
+        tokens.append((kind, val))
 
+    # Pass 1: Scramble Local Identifiers
+    renamed_map = {}
+    for i, (kind, val) in enumerate(tokens):
+        if kind == "IDENTIFIER" and val in ("local", "function", "for"):
+            j = i + 1
+            while j < len(tokens) and tokens[j][0] == "WHITESPACE":
+                j += 1
+            if j < len(tokens) and tokens[j][0] == "IDENTIFIER" and tokens[j][1] not in LUA_KEYWORDS:
+                var_name = tokens[j][1]
+                if var_name not in renamed_map and len(var_name) > 1:
+                    renamed_map[var_name] = random_id("v")
+
+    # Pass 2: Token Mutation & Assembly
+    output = []
+    for i, (kind, val) in enumerate(tokens):
         if kind in ("COMMENT_LONG", "COMMENT_SHORT"):
-            output_tokens.append(" ")
+            output.append(" ")
         elif kind in ("STRING_LONG", "STRING_SQ", "STRING_DQ"):
-            output_tokens.append(transform_string(val, dec_func_name))
+            output.append(transform_string(val, dec_func_name))
         elif kind in ("NUMBER_HEX", "NUMBER_DEC"):
-            output_tokens.append(transform_number(val))
+            output.append(transform_number(val))
+        elif kind == "IDENTIFIER":
+            if val == "true":
+                k1 = random.randint(10, 99)
+                output.append(f"({k1} == {k1})")
+            elif val == "false":
+                k1 = random.randint(10, 99)
+                output.append(f"({k1} == {k1 + 1})")
+            elif val == "nil":
+                output.append("({[0]=nil}[1])")
+            elif val in renamed_map:
+                prev_non_ws = None
+                for k in range(i - 1, -1, -1):
+                    if tokens[k][0] != "WHITESPACE":
+                        prev_non_ws = tokens[k]
+                        break
+                if prev_non_ws and prev_non_ws[1] in (".", ":"):
+                    output.append(val)
+                else:
+                    output.append(renamed_map[val])
+            else:
+                output.append(val)
         elif kind == "WHITESPACE":
-            output_tokens.append(" ")
+            output.append(" ")
         else:
-            output_tokens.append(val)
+            output.append(val)
 
-    return "".join(output_tokens)
+    return "".join(output)
 
 
 # ==============================================================================
-# 2. RUNTIME VM & HARDENED PAYLOAD COMPILER
+# 2. RUNTIME VM, SENTINEL & POISONING ENGINE
 # ==============================================================================
 
 def obfuscate_lua(code: str, token: str) -> str:
@@ -146,8 +198,11 @@ def obfuscate_lua(code: str, token: str) -> str:
         return "print('[Classicfuscator] Empty script executed.')"
 
     v_dec = random_id("Dec")
+    
+    # Step 1: AST Deep Transformation
     ast_transformed = ast_obfuscate(code, v_dec)
 
+    # Step 2: Binary Rolling Key State Machine
     raw_bytes = list(ast_transformed.encode("utf-8"))
     k_seed = random.randint(100000, 999999)
     k_mult = random.randint(5, 29) * 2 + 1
@@ -180,6 +235,7 @@ def obfuscate_lua(code: str, token: str) -> str:
     trans_lua = "{" + ",".join(f"[{s}]={c[1]}" for s, c in state_map.items()) + "}"
     start_state = chunk_states[0] if chunk_states else 0
 
+    # Step 3: Randomized VM Identifiers
     v_env = random_id("Env")
     v_loader = random_id("Ld")
     v_char = random_id("Chr")
@@ -201,15 +257,20 @@ def obfuscate_lua(code: str, token: str) -> str:
     v_genv = random_id("Genv")
     v_anti = random_id("Anti")
 
-    lua_stub = f"""--[[ Protected by Classicfuscator Enterprise ]]--
+    lua_stub = f"""--[[ Classicfuscator Enterprise Sentinel VM ]]--
 return (function(...)
     local {v_genv} = (getgenv and getgenv()) or _ENV or _G
 
+    -- Anti-Hook Sentinel & Tamper Sentinel
     local function {v_anti}()
         if debug and (debug.info or debug.getinfo) then
             local get_i = debug.info or debug.getinfo
             local ok, info = pcall(function() return get_i(1, "slna") end)
             if not ok then return false end
+        end
+        local ts = tostring
+        if ts(pcall):find("hook") or ts(ts):find("hook") or ts(type):find("hook") then
+            return false
         end
         return true
     end
@@ -246,10 +307,13 @@ return (function(...)
         return (l + r) % 256
     end
 
-    {v_genv}.{v_dec} = function(bytes, k)
+    -- Embedded Positional Rolling-Key String Decryptor
+    {v_genv}.{v_dec} = function(bytes, k, m)
         local t = {{}}
         for i = 1, #bytes do
-            t[i] = {v_char}({v_bxor}(bytes[i], k))
+            local pos_k = (k + ((i - 1) * 7)) % 256
+            local step1 = {v_bxor}(bytes[i], m)
+            t[i] = {v_char}({v_bxor}(step1, pos_k))
         end
         return {v_concat}(t)
     end
@@ -304,7 +368,7 @@ end)(...)"""
 
 
 # ==============================================================================
-# 3. ORIGINAL LIGHT THEME DASHBOARD & API
+# 3. ORIGINAL LIGHT THEME WEB DASHBOARD & API
 # ==============================================================================
 
 HTML_TEMPLATE = """<!DOCTYPE html>
@@ -512,7 +576,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             const loaderArea = document.getElementById('loaderOutput');
             
             outputWrapper.style.display = "block";
-            loaderArea.value = "-- Compiling State Machine VM...";
+            loaderArea.value = "-- Compiling Enterprise Pipeline...";
 
             try {
                 const response = await fetch('/obfuscate', {
@@ -567,7 +631,7 @@ PROTECTED_HTML_TEMPLATE = """<!DOCTYPE html>
             max-width: 440px; 
             padding: 40px 28px; 
             border: 1px solid #eef0f4; 
-            text-align: center;
+            text-align: center; 
         }
         h1 { 
             font-size: 24px; 
