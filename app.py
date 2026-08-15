@@ -239,24 +239,28 @@ HTML_TEMPLATE = """<!DOCTYPE html>
         .file-upload-box {
             border: 2px dashed #0070f3;
             border-radius: 12px;
-            padding: 20px;
+            padding: 24px 20px;
             background-color: #ffffff;
             margin-bottom: 20px;
+            text-align: center;
+            cursor: pointer;
+            transition: all 0.2s ease;
+        }
+        .file-upload-box:hover, .file-upload-box.drag-over {
+            background-color: #f0f7ff;
+            border-color: #0052cc;
         }
         .file-upload-title {
             font-size: 16px;
             font-weight: 700;
             color: #1a1a1a;
-            margin-bottom: 12px;
+            margin-bottom: 6px;
             display: block;
         }
-        .file-input-wrapper {
-            display: flex;
-            align-items: center;
-        }
-        input[type="file"] {
-            font-size: 14px;
-            color: #475569;
+        .file-upload-subtext {
+            font-size: 13px;
+            color: #64748b;
+            margin: 0;
         }
         .or-text {
             font-size: 15px;
@@ -319,11 +323,10 @@ HTML_TEMPLATE = """<!DOCTYPE html>
     <div class="card">
         <h1>Classicfuscator</h1>
 
-        <div class="file-upload-box">
+        <div class="file-upload-box" id="dropZone" onclick="document.getElementById('luaFileInput').click()">
             <span class="file-upload-title">Upload a Lua File:</span>
-            <div class="file-input-wrapper">
-                <input type="file" id="luaFileInput" accept=".lua,.txt" onchange="handleFileUpload(event)">
-            </div>
+            <p class="file-upload-subtext" id="dropSubtext">Click to choose or drag & drop file here (.lua, .txt)</p>
+            <input type="file" id="luaFileInput" accept=".lua,.luau,.txt" onchange="handleFileSelect(event)" style="display: none;">
         </div>
 
         <div class="or-text">Or paste your Roblox Lua code here:</div>
@@ -342,15 +345,48 @@ HTML_TEMPLATE = """<!DOCTYPE html>
     </div>
 
     <script>
-        function handleFileUpload(event) {
-            const file = event.target.files[0];
-            if (file) {
-                const reader = new FileReader();
-                reader.onload = function(e) {
-                    document.getElementById('input').value = e.target.result;
-                };
-                reader.readAsText(file);
+        const dropZone = document.getElementById('dropZone');
+        const fileInput = document.getElementById('luaFileInput');
+
+        // Drag & Drop event handlers
+        ['dragenter', 'dragover'].forEach(eventName => {
+            dropZone.addEventListener(eventName, (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                dropZone.classList.add('drag-over');
+            }, false);
+        });
+
+        ['dragleave', 'drop'].forEach(eventName => {
+            dropZone.addEventListener(eventName, (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                dropZone.classList.remove('drag-over');
+            }, false);
+        });
+
+        dropZone.addEventListener('drop', (e) => {
+            const dt = e.dataTransfer;
+            const files = dt.files;
+            if (files.length > 0) {
+                readFileContent(files[0]);
             }
+        });
+
+        function handleFileSelect(event) {
+            const files = event.target.files;
+            if (files.length > 0) {
+                readFileContent(files[0]);
+            }
+        }
+
+        function readFileContent(file) {
+            const reader = new FileReader();
+            reader.onload = function(e) {
+                document.getElementById('input').value = e.target.result;
+                document.getElementById('dropSubtext').innerText = "Loaded: " + file.name;
+            };
+            reader.readAsText(file);
         }
 
         async function obfuscate() {
@@ -382,6 +418,58 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             alert('Loader copied to clipboard!');
         }
     </script>
+</body>
+</html>
+"""
+
+PROTECTED_HTML_TEMPLATE = """<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Protected By Classicfuscator</title>
+    <style>
+        * { box-sizing: border-box; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }
+        body { 
+            background-color: #f2f4f8; 
+            color: #1e293b; 
+            margin: 0; 
+            padding: 20px; 
+            display: flex; 
+            justify-content: center; 
+            align-items: center; 
+            min-height: 100vh; 
+        }
+        .card { 
+            background: #ffffff; 
+            border-radius: 20px; 
+            box-shadow: 0 4px 20px rgba(0, 0, 0, 0.04); 
+            width: 100%; 
+            max-width: 440px; 
+            padding: 40px 28px; 
+            border: 1px solid #eef0f4; 
+            text-align: center;
+        }
+        h1 { 
+            font-size: 24px; 
+            font-weight: 700; 
+            color: #1a1a1a; 
+            margin: 0 0 10px 0; 
+            letter-spacing: -0.3px;
+        }
+        p { 
+            font-size: 15px; 
+            color: #64748b; 
+            margin: 0; 
+            font-weight: 500;
+        }
+    </style>
+</head>
+<body>
+    <div class="card">
+        <h1>Protected By Classicfuscator</h1>
+        <p>Cannot be Shown Publicy</p>
+    </div>
 </body>
 </html>
 """
@@ -429,22 +517,23 @@ def process():
 @app.route("/raw/<token>", methods=["GET"])
 def serve_script(token):
     """
-    Serves payload to Roblox client while blocking web crawlers/browsers.
+    Serves raw payload to Roblox client, while serving a styled card to web browsers.
     """
     user_agent = request.headers.get("User-Agent", "")
 
     # Roblox Client Check
     is_local = "127.0.0.1" in request.host or "localhost" in request.host
-    if not is_local and "Roblox" not in user_agent:
-        return Response("-- Error 403: Access Denied. Requests must originate from Roblox Client.", status=403, mimetype="text/plain")
+    is_roblox = "Roblox" in user_agent or is_local
 
+    # If opened in a web browser, render the styled card page
+    if not is_roblox:
+        return render_template_string(PROTECTED_HTML_TEMPLATE)
+
+    # Roblox client execution path
     code = None
-
-    # Check RAM Cache
     if token in SCRIPT_CACHE:
         code = SCRIPT_CACHE[token]["code"]
     else:
-        # Check Disk Storage
         file_path = os.path.join(SAVED_DIR, f"{token}.lua")
         if os.path.exists(file_path):
             with open(file_path, "r", encoding="utf-8") as f:
@@ -457,7 +546,7 @@ def serve_script(token):
         res.headers["Pragma"] = "no-cache"
         return res
 
-    return Response("-- Error 404: Invalid or Expired Token.", status=404, mimetype="text/plain")
+    return render_template_string(PROTECTED_HTML_TEMPLATE), 404
 
 
 if __name__ == "__main__":
