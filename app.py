@@ -15,7 +15,7 @@ app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1, x_prefix=1)
 # Render Custom Domain Configuration
 CUSTOM_DOMAIN = "https://classicfuscator.onrender.com"
 
-# Persistent Storage
+# Persistent Storage Paths
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 SAVED_DIR = os.path.join(BASE_DIR, "saved_scripts")
 DB_PATH = os.path.join(BASE_DIR, "database.db")
@@ -52,7 +52,7 @@ def ror(val, count, bits=8):
 
 
 # ==============================================================================
-# 1. TIER-S AST LEXER, IDENTIFIER SCRAMBLER & GLOBAL PROXY MUTATOR
+# 1. LUA SYNTAX VALIDATION & TOKEN PARSER
 # ==============================================================================
 
 LUA_KEYWORDS = {
@@ -76,8 +76,89 @@ TOKEN_SPEC = [
 TOKEN_REGEX = re.compile("|".join(f"(?P<{name}>{pattern})" for name, pattern in TOKEN_SPEC))
 
 
+def validate_lua_syntax(lua_code: str) -> tuple[bool, str]:
+    """
+    Validates Lua syntax:
+    - Empty or whitespace input
+    - Unclosed strings & long brackets
+    - Unmatched parentheses, square brackets, and curly braces
+    - Mismatched or unclosed block keywords (function, if, do, while, repeat, end, until)
+    """
+    if not lua_code or not lua_code.strip():
+        return False, "Input code is empty."
+
+    bracket_stack = []
+    block_stack = []
+    tokens = []
+    pos = 0
+
+    for match in TOKEN_REGEX.finditer(lua_code):
+        start, end = match.span()
+        if start > pos:
+            unparsed = lua_code[pos:start].strip()
+            if unparsed:
+                return False, f"Unexpected token or unclosed literal near '{unparsed}'"
+        pos = end
+
+        kind = match.lastgroup
+        val = match.group()
+        if kind != "WHITESPACE" and not kind.startswith("COMMENT"):
+            tokens.append((kind, val))
+
+    if pos < len(lua_code):
+        unparsed = lua_code[pos:].strip()
+        if unparsed:
+            return False, f"Unclosed string, comment, or invalid token near '{unparsed}'"
+
+    # Syntax block & bracket verification
+    for kind, val in tokens:
+        if val in ("(", "[", "{"):
+            bracket_stack.append(val)
+        elif val in (")", "]", "}"):
+            if not bracket_stack:
+                return False, f"Unmatched closing bracket '{val}'"
+            last_b = bracket_stack.pop()
+            expected = {")": "(", "]": "[", "}": "{"}[val]
+            if last_b != expected:
+                return False, f"Mismatched bracket: expected closing for '{last_b}', got '{val}'"
+
+        if kind == "IDENTIFIER":
+            if val == "function":
+                block_stack.append("function")
+            elif val == "do":
+                block_stack.append("do")
+            elif val == "then":
+                block_stack.append("if")
+            elif val == "repeat":
+                block_stack.append("repeat")
+            elif val in ("elseif", "else"):
+                if not block_stack or block_stack[-1] != "if":
+                    return False, f"Unexpected '{val}' without matching 'if/then' condition"
+            elif val == "end":
+                if not block_stack:
+                    return False, "Unexpected 'end' with no opening block"
+                popped = block_stack.pop()
+                if popped not in ("function", "do", "if"):
+                    return False, f"Mismatched 'end' for '{popped}' block"
+            elif val == "until":
+                if not block_stack or block_stack[-1] != "repeat":
+                    return False, "Unexpected 'until' with no matching 'repeat' loop"
+                block_stack.pop()
+
+    if bracket_stack:
+        return False, f"Unclosed bracket '{bracket_stack[-1]}'"
+
+    if block_stack:
+        return False, f"Missing 'end' or 'until' for unclosed '{block_stack[-1]}' block"
+
+    return True, ""
+
+
+# ==============================================================================
+# 2. S-TIER AST MUTATOR & CONSTANT TRANSFORMER
+# ==============================================================================
+
 def transform_number(num_str: str) -> str:
-    """Mutates numeric constants into nested algebraic and bitwise expressions."""
     try:
         if num_str.lower().startswith("0x"):
             val = int(num_str, 16)
@@ -110,7 +191,6 @@ def transform_number(num_str: str) -> str:
 
 
 def transform_string(str_val: str, dec_func_name: str) -> str:
-    """Encrypts string literals with rolling positional keys and dynamic masks."""
     if (str_val.startswith('"') and str_val.endswith('"')) or (str_val.startswith("'") and str_val.endswith("'")):
         inner = str_val[1:-1]
         try:
@@ -136,20 +216,12 @@ def transform_string(str_val: str, dec_func_name: str) -> str:
 
 
 def ast_obfuscate(lua_code: str, dec_func_name: str) -> str:
-    """
-    Tier-S Multi-Pass AST Obfuscation Engine:
-    1. Scope-aware homoglyphic identifier renaming.
-    2. Positional rolling-key string virtualization.
-    3. Nested arithmetic number mutation.
-    4. Runtime Boolean & Nil invariant transformations.
-    """
     tokens = []
     for match in TOKEN_REGEX.finditer(lua_code):
         kind = match.lastgroup
         val = match.group()
         tokens.append((kind, val))
 
-    # Pass 1: Collect Local Identifiers for Homoglyphic Collision
     renamed_map = {}
     for i, (kind, val) in enumerate(tokens):
         if kind == "IDENTIFIER" and val in ("local", "function", "for"):
@@ -161,7 +233,6 @@ def ast_obfuscate(lua_code: str, dec_func_name: str) -> str:
                 if var_name not in renamed_map and len(var_name) > 1:
                     renamed_map[var_name] = random_id("v")
 
-    # Pass 2: Mutate & Reassemble AST Stream
     output = []
     for i, (kind, val) in enumerate(tokens):
         if kind in ("COMMENT_LONG", "COMMENT_SHORT"):
@@ -200,19 +271,13 @@ def ast_obfuscate(lua_code: str, dec_func_name: str) -> str:
 
 
 # ==============================================================================
-# 2. RUNTIME VM, SENTINEL MATRIX & POISONING ENGINE
+# 3. RUNTIME VM, SENTINEL MATRIX & POISONING ENGINE
 # ==============================================================================
 
 def obfuscate_lua(code: str, token: str) -> str:
-    if not code.strip():
-        return "print('[Classicfuscator] Empty script executed.')"
-
     v_dec = random_id("Dec")
-    
-    # Step 1: Deep AST Multi-Pass Transformation
     ast_transformed = ast_obfuscate(code, v_dec)
 
-    # Step 2: Binary Rolling-Key State Machine Generation
     raw_bytes = list(ast_transformed.encode("utf-8"))
     k_seed = random.randint(100000, 999999)
     k_mult = random.randint(5, 29) * 2 + 1
@@ -245,7 +310,6 @@ def obfuscate_lua(code: str, token: str) -> str:
     trans_lua = "{" + ",".join(f"[{s}]={c[1]}" for s, c in state_map.items()) + "}"
     start_state = chunk_states[0] if chunk_states else 0
 
-    # Step 3: Randomized VM Identifiers
     v_env = random_id("Env")
     v_loader = random_id("Ld")
     v_char = random_id("Chr")
@@ -267,26 +331,22 @@ def obfuscate_lua(code: str, token: str) -> str:
     v_genv = random_id("Genv")
     v_anti = random_id("Anti")
 
-    lua_stub = f"""--[[ Classicfuscator v14.0 Enterprise S-Tier VM ]]--
+    lua_stub = f"""--[[ Classicfuscator Enterprise Sentinel VM ]]--
 return (function(...)
     local {v_genv} = (getgenv and getgenv()) or _ENV or _G
 
-    -- Multi-Vector Anti-Hook & Integrity Sentinel Matrix
     local function {v_anti}()
-        -- 1. Callstack Frame & Caller Inspection
         if debug and (debug.info or debug.getinfo) then
             local get_i = debug.info or debug.getinfo
             local ok, info = pcall(function() return get_i(1, "slna") end)
             if not ok then return false end
         end
 
-        -- 2. C-Closure Hook Validation
         local ts = tostring
         if ts(pcall):find("hook") or ts(ts):find("hook") or ts(type):find("hook") or ts(setmetatable):find("hook") then
             return false
         end
 
-        -- 3. Metatable Hook Trap on Environment
         if getrawmetatable then
             local mt = getrawmetatable({v_genv})
             if mt and (rawget(mt, "__index") or rawget(mt, "__namecall")) then
@@ -300,7 +360,6 @@ return (function(...)
         return true
     end
 
-    -- Silent State Poisoning on Tamper
     local {v_seed} = {k_seed}
     if not {v_anti}() then
         {v_seed} = ({v_seed} ^ 0xDEADBEEF) % 256
@@ -335,7 +394,6 @@ return (function(...)
         return (l + r) % 256
     end
 
-    -- Embedded Positional Rolling-Key String Decryptor
     {v_genv}.{v_dec} = function(bytes, k, m)
         local t = {{}}
         for i = 1, #bytes do
@@ -395,7 +453,7 @@ end)(...)"""
 
 
 # ==============================================================================
-# 3. ORIGINAL LIGHT THEME WEB DASHBOARD & API
+# 4. LIGHT THEME DASHBOARD & FLASK API
 # ==============================================================================
 
 HTML_TEMPLATE = """<!DOCTYPE html>
@@ -543,7 +601,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
 
         <textarea id="input" placeholder=""></textarea>
 
-        <button class="btn" onclick="obfuscate()">Start Obfuscation</button>
+        <button class="btn" id="submitBtn" onclick="obfuscate()">Start Obfuscation</button>
 
         <div class="output-container" id="outputWrapper">
             <div class="loader-box">
@@ -601,9 +659,17 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             const inputCode = document.getElementById('input').value;
             const outputWrapper = document.getElementById('outputWrapper');
             const loaderArea = document.getElementById('loaderOutput');
+            const submitBtn = document.getElementById('submitBtn');
             
+            if (!inputCode.trim()) {
+                outputWrapper.style.display = "block";
+                loaderArea.value = "-- Error: Input script is empty. Please enter your Lua code.";
+                return;
+            }
+
             outputWrapper.style.display = "block";
-            loaderArea.value = "-- Compiling S-Tier Pipeline...";
+            loaderArea.value = "-- Validating syntax & compiling S-Tier pipeline...";
+            submitBtn.innerText = "Processing...";
 
             try {
                 const response = await fetch('/obfuscate', {
@@ -613,9 +679,15 @@ HTML_TEMPLATE = """<!DOCTYPE html>
                 });
 
                 const data = await response.json();
-                loaderArea.value = data.loader || "-- Error generating loader.";
+                if (response.ok && data.loader) {
+                    loaderArea.value = data.loader;
+                } else {
+                    loaderArea.value = "-- " + (data.error || "Syntax error detected. Obfuscation aborted.");
+                }
             } catch (err) {
-                loaderArea.value = "-- Generation failed: " + err;
+                loaderArea.value = "-- Network error: Could not connect to server.";
+            } finally {
+                submitBtn.innerText = "Start Obfuscation";
             }
         }
 
@@ -695,6 +767,21 @@ def process():
     data = request.get_json(silent=True) or {}
     raw_code = data.get("code", "")
     
+    # 1. Validation: Disallow empty input
+    if not raw_code or not raw_code.strip():
+        return jsonify({
+            "success": False,
+            "error": "Error: Input script cannot be empty."
+        }), 400
+
+    # 2. Validation: Syntax Error Check
+    is_valid, error_message = validate_lua_syntax(raw_code)
+    if not is_valid:
+        return jsonify({
+            "success": False,
+            "error": f"Syntax Error: {error_message}"
+        }), 400
+    
     token = uuid.uuid4().hex
     obfuscated_code = obfuscate_lua(raw_code, token)
     
@@ -731,6 +818,7 @@ def process():
     loader_script = f'loadstring(game:HttpGet("{domain_url}/raw/{token}"))()'
 
     return jsonify({
+        "success": True,
         "loader": loader_script,
         "token": token
     })
