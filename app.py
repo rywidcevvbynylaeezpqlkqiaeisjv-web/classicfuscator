@@ -150,7 +150,7 @@ def validate_lua_syntax(lua_code: str) -> tuple[bool, str]:
 
 
 # ==============================================================================
-# 2. CONFIGURABLE AST TRANSFORMER
+# 2. CONFIGURABLE AST TRANSFORMER (OBFUSCATOR)
 # ==============================================================================
 
 def decode_lua_string_bytes(str_val: str) -> bytes:
@@ -508,21 +508,64 @@ end)(...)"""
 
 def obfuscate_pipeline(raw_code: str, settings: dict) -> str:
     v_dec = random_id("Dec")
-    
-    # 1. AST Multi-Pass Transformation
     current_payload = ast_obfuscate(raw_code, v_dec, settings)
-    
-    # 2. Multi-Layer VM Packaging
     layers = max(1, min(5, int(settings.get("layers", 1))))
     for layer_idx in range(layers):
         is_outer = (layer_idx == 0)
         current_payload = build_vm_layer(current_payload, v_dec, settings, is_outer)
-
     return current_payload
 
 
 # ==============================================================================
-# 4. LIGHT THEME CATEGORY DASHBOARD & API
+# 4. DEOBFUSCATOR ENGINE
+# ==============================================================================
+
+def deobfuscate_lua(lua_code: str) -> tuple[bool, str]:
+    """Applies heuristic deobfuscation passes to clean up obfuscated code."""
+    if not lua_code or not lua_code.strip():
+        return False, "Input code is empty."
+
+    cleaned = lua_code
+
+    # Pass 1: Strip standard wrapper headers / watermarks
+    cleaned = re.sub(r"--\[\[.*?Protected by.*?\]\]", "", cleaned, flags=re.IGNORECASE | re.DOTALL)
+    cleaned = re.sub(r"--\[\[.*?\]\]", "", cleaned)
+
+    # Pass 2: Evaluate mathematical formula constants, e.g., ((val + offset) - offset)
+    def eval_math_sub(match):
+        expr = match.group(1)
+        try:
+            # Safely evaluate simple arithmetic expressions
+            if re.match(r"^[\d\s\+\-\*/\(\)\.]+$", expr):
+                res = eval(expr)
+                if isinstance(res, float) and res.is_integer():
+                    res = int(res)
+                return str(res)
+        except Exception:
+            pass
+        return match.group(0)
+
+    # Match inner patterns like ((123 + 456) - 456) or ((base / mult))
+    cleaned = re.sub(r"\((?:\(([\d\s\+\-\*/\(\)\.]+)\))\)", eval_math_sub, cleaned)
+    cleaned = re.sub(r"\(([\d\s\+\-\*/\(\)\.]+)\)", eval_math_sub, cleaned)
+
+    # Pass 3: Simplify boolean/nil traps
+    cleaned = re.sub(r"\(\d+\s*==\s*\d+\)", lambda m: "true" if eval(m.group(0)) else "false", cleaned)
+    cleaned = re.sub(r"\(\{\[0\]\s*=\s*nil\}\[1\]\)", "nil", cleaned)
+
+    # Pass 4: Clean excessive empty lines and redundant whitespace
+    lines = [line.strip() for line in cleaned.splitlines()]
+    non_empty_lines = [line for line in lines if line]
+    cleaned = "\n".join(non_empty_lines)
+
+    if not cleaned:
+        return False, "Deobfuscation resulted in empty output. Code may be fully compiled bytecode."
+
+    return True, cleaned
+
+
+# ==============================================================================
+# 5. LIGHT THEME CATEGORY DASHBOARD & API
 # ==============================================================================
 
 HTML_TEMPLATE = """<!DOCTYPE html>
@@ -548,7 +591,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             border-radius: 20px; 
             box-shadow: 0 4px 20px rgba(0, 0, 0, 0.03); 
             width: 100%; 
-            max-width: 560px; 
+            max-width: 580px; 
             padding: 36px 32px; 
             border: 1px solid #eef0f4; 
         }
@@ -570,11 +613,11 @@ HTML_TEMPLATE = """<!DOCTYPE html>
         }
         .tab-btn {
             flex: 1;
-            padding: 10px 16px;
+            padding: 10px 14px;
             border: none;
             background: transparent;
             color: #64748b;
-            font-size: 14px;
+            font-size: 13.5px;
             font-weight: 600;
             border-radius: 8px;
             cursor: pointer;
@@ -671,7 +714,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
         }
         .loader-text {
             width: 100%;
-            height: 48px;
+            height: 120px;
             background: #ffffff;
             border: 1px solid #dcdfe6;
             border-radius: 8px;
@@ -679,9 +722,9 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             font-family: monospace;
             font-size: 12.5px;
             padding: 12px;
-            white-space: nowrap;
+            white-space: pre-wrap;
             overflow-x: auto;
-            resize: none;
+            resize: vertical;
         }
 
         .setting-group {
@@ -744,15 +787,17 @@ HTML_TEMPLATE = """<!DOCTYPE html>
         <h1>Classicfuscator</h1>
 
         <div class="tab-nav">
-            <button class="tab-btn active" onclick="switchTab('obfuscatorTab', this)">Category 1: Obfuscator</button>
-            <button class="tab-btn" onclick="switchTab('settingsTab', this)">Category 2: Settings</button>
+            <button class="tab-btn active" onclick="switchTab('obfuscatorTab', this)">1. Obfuscator</button>
+            <button class="tab-btn" onclick="switchTab('deobfuscatorTab', this)">2. Deobfuscator</button>
+            <button class="tab-btn" onclick="switchTab('settingsTab', this)">3. Settings</button>
         </div>
 
+        <!-- OBFUSCATOR TAB -->
         <div id="obfuscatorTab" class="tab-content active">
-            <div class="file-upload-box" id="dropZone" onclick="document.getElementById('luaFileInput').click()">
+            <div class="file-upload-box" id="dropZoneObf" onclick="document.getElementById('luaFileInput').click()">
                 <span class="file-upload-title">Upload a Lua File:</span>
-                <p class="file-upload-subtext" id="dropSubtext">Click to choose or drag & drop file (.lua, .txt)</p>
-                <input type="file" id="luaFileInput" accept=".lua,.luau,.txt" onchange="handleFileSelect(event)" style="display: none;">
+                <p class="file-upload-subtext" id="dropSubtextObf">Click to choose or drag & drop file (.lua, .txt)</p>
+                <input type="file" id="luaFileInput" accept=".lua,.luau,.txt" onchange="handleFileSelect(event, 'input', 'dropSubtextObf')" style="display: none;">
             </div>
 
             <div class="or-text">Or paste your Roblox Lua script here:</div>
@@ -763,12 +808,35 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             <div class="output-container" id="outputWrapper">
                 <div class="loader-box">
                     <span class="section-label">Roblox Loader Script (1-Liner):</span>
-                    <textarea id="loaderOutput" class="loader-text" readonly></textarea>
+                    <textarea id="loaderOutput" class="loader-text" readonly style="height: 48px; white-space: nowrap;"></textarea>
                     <button class="btn" id="copyBtn" style="background-color: #334155; color: #ffffff; box-shadow: none; margin-top: 10px;" onclick="copyLoader()">Copy Loader</button>
                 </div>
             </div>
         </div>
 
+        <!-- DEOBFUSCATOR TAB -->
+        <div id="deobfuscatorTab" class="tab-content">
+            <div class="file-upload-box" id="dropZoneDeobf" onclick="document.getElementById('luaDeobFileInput').click()">
+                <span class="file-upload-title">Upload Obfuscated Lua File:</span>
+                <p class="file-upload-subtext" id="dropSubtextDeobf">Click to choose or drag & drop obfuscated script</p>
+                <input type="file" id="luaDeobFileInput" accept=".lua,.luau,.txt" onchange="handleFileSelect(event, 'deobInput', 'dropSubtextDeobf')" style="display: none;">
+            </div>
+
+            <div class="or-text">Or paste obfuscated Lua script here:</div>
+            <textarea id="deobInput" placeholder="-- Paste obfuscated Lua code here..."></textarea>
+
+            <button class="btn" id="deobSubmitBtn" style="background-color: #0f172a;" onclick="deobfuscateCode()">Start Deobfuscation</button>
+
+            <div class="output-container" id="deobOutputWrapper" style="display: block;">
+                <div class="loader-box">
+                    <span class="section-label">Cleaned / Deobfuscated Output:</span>
+                    <textarea id="deobLoaderOutput" class="loader-text" placeholder="Deobfuscated code results will appear here..." readonly></textarea>
+                    <button class="btn" id="copyDeobBtn" style="background-color: #334155; color: #ffffff; box-shadow: none; margin-top: 10px;" onclick="copyDeobOutput()">Copy Cleaned Code</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- SETTINGS TAB -->
         <div id="settingsTab" class="tab-content">
             <div class="setting-group">
                 <div class="setting-header">
@@ -853,42 +921,46 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             btn.classList.add('active');
         }
 
-        const dropZone = document.getElementById('dropZone');
-
-        ['dragenter', 'dragover'].forEach(eventName => {
-            dropZone.addEventListener(eventName, (e) => {
-                e.preventDefault();
-                e.stopPropagation();
-                dropZone.classList.add('drag-over');
-            }, false);
-        });
-
-        ['dragleave', 'drop'].forEach(eventName => {
-            dropZone.addEventListener(eventName, (e) => {
-                e.preventDefault();
-                e.stopPropagation();
-                dropZone.classList.remove('drag-over');
-            }, false);
-        });
-
-        dropZone.addEventListener('drop', (e) => {
-            const dt = e.dataTransfer;
-            const files = dt.files;
-            if (files.length > 0) readFileContent(files[0]);
-        });
-
-        function handleFileSelect(event) {
-            const files = event.target.files;
-            if (files.length > 0) readFileContent(files[0]);
+        function setupDragAndDrop(dropZoneId, textareaId, subtextId) {
+            const dropZone = document.getElementById(dropZoneId);
+            ['dragenter', 'dragover'].forEach(eventName => {
+                dropZone.addEventListener(eventName, (e) => {
+                    e.preventDefault(); e.stopPropagation();
+                    dropZone.classList.add('drag-over');
+                }, false);
+            });
+            ['dragleave', 'drop'].forEach(eventName => {
+                dropZone.addEventListener(eventName, (e) => {
+                    e.preventDefault(); e.stopPropagation();
+                    dropZone.classList.remove('drag-over');
+                }, false);
+            });
+            dropZone.addEventListener('drop', (e) => {
+                const files = e.dataTransfer.files;
+                if (files.length > 0) {
+                    const reader = new FileReader();
+                    reader.onload = function(evt) {
+                        document.getElementById(textareaId).value = evt.target.result;
+                        document.getElementById(subtextId).innerText = "Loaded: " + files[0].name;
+                    };
+                    reader.readAsText(files[0]);
+                }
+            });
         }
 
-        function readFileContent(file) {
-            const reader = new FileReader();
-            reader.onload = function(e) {
-                document.getElementById('input').value = e.target.result;
-                document.getElementById('dropSubtext').innerText = "Loaded: " + file.name;
-            };
-            reader.readAsText(file);
+        setupDragAndDrop('dropZoneObf', 'input', 'dropSubtextObf');
+        setupDragAndDrop('dropZoneDeobf', 'deobInput', 'dropSubtextDeobf');
+
+        function handleFileSelect(event, textareaId, subtextId) {
+            const files = event.target.files;
+            if (files.length > 0) {
+                const reader = new FileReader();
+                reader.onload = function(e) {
+                    document.getElementById(textareaId).value = e.target.result;
+                    document.getElementById(subtextId).innerText = "Loaded: " + files[0].name;
+                };
+                reader.readAsText(files[0]);
+            }
         }
 
         async function obfuscate() {
@@ -920,10 +992,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
                 const response = await fetch('/obfuscate', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ 
-                        code: inputCode,
-                        settings: settings
-                    })
+                    body: JSON.stringify({ code: inputCode, settings: settings })
                 });
 
                 const data = await response.json();
@@ -939,6 +1008,39 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             }
         }
 
+        async function deobfuscateCode() {
+            const inputCode = document.getElementById('deobInput').value;
+            const loaderArea = document.getElementById('deobLoaderOutput');
+            const submitBtn = document.getElementById('deobSubmitBtn');
+            
+            if (!inputCode.trim()) {
+                loaderArea.value = "-- Error: Input script is empty. Please enter obfuscated Lua code.";
+                return;
+            }
+
+            loaderArea.value = "-- Parsing heuristics and deobfuscating code...";
+            submitBtn.innerText = "Deobfuscating...";
+
+            try {
+                const response = await fetch('/deobfuscate', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ code: inputCode })
+                });
+
+                const data = await response.json();
+                if (response.ok && data.code) {
+                    loaderArea.value = data.code;
+                } else {
+                    loaderArea.value = "-- " + (data.error || "Deobfuscation failed.");
+                }
+            } catch (err) {
+                loaderArea.value = "-- Network error: Could not connect to server.";
+            } finally {
+                submitBtn.innerText = "Start Deobfuscation";
+            }
+        }
+
         function copyLoader() {
             const loaderArea = document.getElementById('loaderOutput');
             const copyBtn = document.getElementById('copyBtn');
@@ -946,6 +1048,15 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             navigator.clipboard.writeText(loaderArea.value);
             copyBtn.innerText = "Copied to Clipboard!";
             setTimeout(() => { copyBtn.innerText = "Copy Loader"; }, 2000);
+        }
+
+        function copyDeobOutput() {
+            const loaderArea = document.getElementById('deobLoaderOutput');
+            const copyBtn = document.getElementById('copyDeobBtn');
+            loaderArea.select();
+            navigator.clipboard.writeText(loaderArea.value);
+            copyBtn.innerText = "Copied to Clipboard!";
+            setTimeout(() => { copyBtn.innerText = "Copy Cleaned Code"; }, 2000);
         }
     </script>
 </body>
@@ -1038,6 +1149,30 @@ def process():
         "success": True,
         "loader": loader_script,
         "token": token
+    })
+
+
+@app.route("/deobfuscate", methods=["POST"])
+def deobfuscate_endpoint():
+    data = request.get_json(silent=True) or {}
+    raw_code = data.get("code", "")
+    
+    if not raw_code or not raw_code.strip():
+        return jsonify({
+            "success": False,
+            "error": "Error: Input script cannot be empty."
+        }), 400
+
+    success, result = deobfuscate_lua(raw_code)
+    if not success:
+        return jsonify({
+            "success": False,
+            "error": result
+        }), 400
+
+    return jsonify({
+        "success": True,
+        "code": result
     })
 
 
