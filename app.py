@@ -50,8 +50,8 @@ def ror(val, count, bits=8):
 
 def virtualize_constants_and_tokens(code: str):
     """
-    Tier-1 Obfuscation Engine: Lexically extracts all string literals into an 
-    encrypted Constant Pool Table (_K[]), completely eliminating plaintext string constants.
+    Lexically extracts all string literals into a Constant Pool Table (_K[]),
+    eliminating plaintext string constants.
     """
     constants = []
 
@@ -63,14 +63,14 @@ def virtualize_constants_and_tokens(code: str):
 
     def double_quote_sub(m):
         s = m.group(1)
-        if not s or len(s) > 150 or "\n" in s:
+        if not s or len(s) > 120 or "\n" in s:
             return m.group(0)
         c_idx = add_const(s)
         return f"_K[{c_idx + 1}]"
 
     def single_quote_sub(m):
         s = m.group(1)
-        if not s or len(s) > 150 or "\n" in s:
+        if not s or len(s) > 120 or "\n" in s:
             return m.group(0)
         c_idx = add_const(s)
         return f"_K[{c_idx + 1}]"
@@ -90,9 +90,10 @@ def obfuscate_lua(code: str, token: str) -> str:
     if not code.strip():
         return "-- Error: Empty script provided."
 
-    # 1. Constant Pool Virtualization Engine
+    # 1. Virtualize Constants and wrap code to accept _K as a parameter
     processed_code, constants = virtualize_constants_and_tokens(code)
-    raw_bytes = list(processed_code.encode("utf-8"))
+    wrapped_code = f"return (function(_K, ...)\n{processed_code}\nend)"
+    raw_bytes = list(wrapped_code.encode("utf-8"))
 
     # 2. Encrypt Constants Pool
     k_seed = random.randint(100000, 999999)
@@ -147,8 +148,8 @@ def obfuscate_lua(code: str, token: str) -> str:
     v_concat = random_id("Cat")
     v_bxor = random_id("Bx")
     v_rol = random_id("Rl")
-    v_kpool = random_id("K")
     v_enc_k = random_id("EK")
+    v_kpool = random_id("K")
     v_chunks = random_id("Data")
     v_trans = random_id("Tr")
     v_state = random_id("St")
@@ -162,10 +163,10 @@ def obfuscate_lua(code: str, token: str) -> str:
     v_clean = random_id("Cln")
     v_res = random_id("Res")
     v_err = random_id("Err")
-    v_t0 = random_id("T0")
+    v_func = random_id("Fn")
 
-    # 6. Hardened Tier-1 Custom VM Stub
-    lua_stub = f"""--[[ Classicfuscator v9 Enterprise Commercial VM ]]--
+    # 6. Hardened Custom VM Stub
+    lua_stub = f"""--[[ Classicfuscator v9.1 Enterprise VM ]]--
 return (function(...)
     local {v_env} = (getgenv and getgenv()) or _ENV or _G
     local {v_loader} = {v_env}.loadstring or load
@@ -177,10 +178,8 @@ return (function(...)
     local {v_char} = string.char
     local {v_concat} = table.concat
 
-    -- Self-Destructing Multi-Vector Anti-Hook Guard
+    -- Safe Anti-Hook Check (Verifies VM Loader Integrity Only)
     local {v_clean} = (function()
-        local _pcall = pcall
-        local _getfenv = getfenv
         local _debug_info = (debug and debug.info)
         local _islclosure = islclosure
         local _isfunctionhooked = isfunctionhooked
@@ -191,25 +190,11 @@ return (function(...)
             local src = _debug_info({v_loader}, "s")
             if src and src ~= "[C]" and src ~= "=[C]" then return false end
         end
-
-        if _getfenv and _pcall then
-            local local_env = _getfenv(1)
-            for lvl = 0, 12 do
-                local ok, env = _pcall(_getfenv, lvl)
-                if ok and env and env ~= local_env then
-                    for k in pairs(env) do
-                        if k == "hookfunction" or k == "hookmetamethod" or k == "replaceclosure" then
-                            return false
-                        end
-                    end
-                end
-            end
-        end
         return true
     end)()
 
     if not {v_clean} then
-        return (function() end)() -- Quietly trap execution if hooked
+        error("[Classicfuscator] Security Alert: Execution Loader Hook Detected", 0)
     end
     {v_clean} = nil
 
@@ -240,9 +225,9 @@ return (function(...)
     local {v_shift} = {k_shift}
     local {v_mask} = {k_mask}
 
-    -- Decrypt Constant Pool (_K Table Virtualization)
+    -- Decrypt Constant Pool (_K Table Register)
     local {v_enc_k} = {consts_lua}
-    local _K = {{}}
+    local {v_kpool} = {{}}
     for c_idx = 1, #{v_enc_k} do
         local raw_c = {v_enc_k}[c_idx]
         local c_out = {{}}
@@ -255,7 +240,7 @@ return (function(...)
             local step3 = {v_bxor}(step2, c_key)
             c_out[#c_out + 1] = {v_char}({v_rol}(step3, {v_shift}))
         end
-        _K[c_idx] = {v_concat}(c_out)
+        {v_kpool}[c_idx] = {v_concat}(c_out)
     end
     {v_enc_k} = nil
 
@@ -265,13 +250,8 @@ return (function(...)
     local {v_state} = {start_state}
     local {v_out} = {{}}
     local {v_idx} = 0
-    local {v_t0} = (os and os.clock and os.clock()) or 0
 
     while {v_state} ~= 0 do
-        if os and os.clock and (os.clock() - {v_t0} > 10.0) then
-            return -- Abort if thread paused by debugger
-        end
-
         local chunk = {v_chunks}[{v_state}]
         if not chunk then break end
 
@@ -301,7 +281,12 @@ return (function(...)
     payload_str = nil
 
     if type({v_res}) == "function" then
-        return {v_res}(...)
+        local {v_func} = {v_res}()
+        if type({v_func}) == "function" then
+            return {v_func}({v_kpool}, ...)
+        else
+            return {v_res}({v_kpool}, ...)
+        end
     else
         error("[Classicfuscator] Syntax Error in Payload: " .. tostring({v_err}), 0)
     end
@@ -501,7 +486,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             const loaderArea = document.getElementById('loaderOutput');
             
             outputWrapper.style.display = "block";
-            loaderArea.value = "-- Compiling Commercial Enterprise VM...";
+            loaderArea.value = "-- Compiling State Machine VM...";
 
             try {
                 const response = await fetch('/obfuscate', {
@@ -594,7 +579,7 @@ def process():
     # Generate dynamic 32-character Hex Token
     token = uuid.uuid4().hex
     
-    # Compile with Constant Virtualization + State Machine VM
+    # Compile with Constant Pool Virtualization + State Machine VM
     obfuscated_code = obfuscate_lua(raw_code, token)
     
     # Store in RAM Cache
