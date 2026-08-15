@@ -3,16 +3,15 @@ import os
 import random
 import re
 import string
+import time
 import uuid
 from flask import Flask, jsonify, render_template_string, request, Response
 from werkzeug.middleware.proxy_fix import ProxyFix
 
 app = Flask(__name__)
-
-# Enable ProxyFix so Flask recognizes HTTPS behind Render/Cloudflare proxies
 app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1, x_prefix=1)
 
-# Storage for obfuscated scripts (RAM + Server Disk)
+# In-Memory Cache + Disk Storage
 SCRIPT_CACHE = {}
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 SAVED_DIR = os.path.join(BASE_DIR, "saved_scripts")
@@ -20,9 +19,9 @@ os.makedirs(SAVED_DIR, exist_ok=True)
 
 
 def random_id(prefix=""):
-    """Generates look-alike confusing variable names."""
+    """Generates homoglyph-style confusing variable names."""
     chars = ["I", "l", "1", "_"]
-    body = "".join(random.choices(chars, k=random.randint(18, 28)))
+    body = "".join(random.choices(chars, k=random.randint(20, 30)))
     return f"{prefix}_{body}"
 
 
@@ -35,79 +34,77 @@ def obfuscate_lua(code: str) -> str:
     if not code.strip():
         return "-- Error: Empty script provided."
 
-    # 1. Encryption Keys
-    k_seed = random.randint(1000, 999999)
-    k_mult = random.randint(3, 19) * 2 + 1
+    # 1. Polynomial Cipher Keys & Rolling State Seed
+    k_seed = random.randint(10000, 999999)
+    k_mult = random.randint(5, 29) * 2 + 1
     k_inc = random.randint(1, 255)
     k_shift = random.randint(1, 7)
-    k_mask = random.randint(32, 224)
+    k_mask = random.randint(16, 240)
+    k_poly1 = random.randint(3, 17)
 
-    # 2. Triple-Layer Bitwise Encryption
+    # 2. Rolling-Key Positional Encryption
     raw_bytes = list(code.encode("utf-8"))
     encrypted_bytes = []
     
     current_key = k_seed
     for idx, byte in enumerate(raw_bytes):
-        current_key = (current_key * k_mult + k_inc) % 256
+        current_key = (current_key * k_mult + k_inc + idx * k_poly1) % 256
         rotated = ror(byte, k_shift)
-        enc = (rotated ^ current_key ^ k_mask ^ ((idx + 13) % 256)) % 256
+        pos_key = (idx * 7 + 13) % 256
+        enc = (rotated ^ current_key ^ k_mask ^ pos_key) % 256
         encrypted_bytes.append(enc)
 
-    # 3. Chunk Array into Dynamic Sub-tables
-    chunk_size = random.randint(15, 35)
+    # 3. Dynamic Sub-Table Chunking
+    chunk_size = random.randint(12, 28)
     chunks = [
         encrypted_bytes[i : i + chunk_size]
         for i in range(0, len(encrypted_bytes), chunk_size)
     ]
     chunks_lua = "{" + ",".join("{" + ",".join(map(str, c)) + "}" for c in chunks) + "}"
 
-    # 4. Identifier Generation
-    v_seed = random_id("s")
-    v_mult = random_id("m")
-    v_inc = random_id("c")
-    v_shift = random_id("sh")
-    v_mask = random_id("mk")
-    v_chunks = random_id("data")
-    v_out = random_id("out")
-    v_state = random_id("st")
-    v_char = random_id("chr")
-    v_concat = random_id("cat")
-    v_env = random_id("env")
-    v_loader = random_id("ld")
-    v_res = random_id("res")
-    v_err = random_id("err")
-    v_idx = random_id("idx")
-    v_bxor = random_id("bx")
-    v_rol = random_id("rl")
-    v_test_fn = random_id("tfn")
-    v_test_err = random_id("terr")
+    # 4. Randomized VM State Identifiers
+    st_init = random.randint(100, 199)
+    st_check = random.randint(200, 299)
+    st_unpack = random.randint(300, 399)
+    st_exec = random.randint(400, 499)
+    st_trap = random.randint(500, 599)
 
-    # 5. Zero-Warning Luau Stub
-    lua_stub = f"""--[[ Classicfuscator v3 ]]--
+    # 5. Identifier Names Generator
+    v_seed = random_id("S")
+    v_mult = random_id("M")
+    v_inc = random_id("C")
+    v_shift = random_id("Sh")
+    v_mask = random_id("Mk")
+    v_poly1 = random_id("Py")
+    v_chunks = random_id("Data")
+    v_out = random_id("Out")
+    v_state = random_id("St")
+    v_char = random_id("Chr")
+    v_concat = random_id("Cat")
+    v_env = random_id("Env")
+    v_loader = random_id("Ld")
+    v_res = random_id("Res")
+    v_err = random_id("Err")
+    v_idx = random_id("Idx")
+    v_bxor = random_id("Bx")
+    v_rol = random_id("Rl")
+    v_disp = random_id("Disp")
+    v_inv_chk = random_id("Inv")
+
+    # 6. Hardened VM State-Machine Stub
+    lua_stub = f"""--[[ Classicfuscator v5 Hardened VM ]]--
 return (function(...)
-    local {v_seed} = {k_seed}
-    local {v_mult} = {k_mult}
-    local {v_inc} = {k_inc}
-    local {v_shift} = {k_shift}
-    local {v_mask} = {k_mask}
-    local {v_chunks} = {chunks_lua}
-
     local {v_env} = (getgenv and getgenv()) or _ENV or _G
     local {v_loader} = {v_env}.loadstring or load
 
-    -- Smart Anti-Hook Check
     if type({v_loader}) ~= "function" then
         return
-    end
-
-    local {v_test_fn}, {v_test_err} = {v_loader}("return true", "=[test]")
-    if type({v_test_fn}) ~= "function" or {v_test_fn}() ~= true then
-        return (function() end)()
     end
 
     local {v_char} = string.char
     local {v_concat} = table.concat
 
+    -- Safe Bitwise XOR Engine with Pure Lua Fallback
     local function {v_bxor}(a, b)
         if bit32 and bit32.bxor then return bit32.bxor(a, b) end
         if bit and bit.bxor then return bit.bxor(a, b) end
@@ -127,53 +124,82 @@ return (function(...)
         return (l + r) % 256
     end
 
+    -- Mathematical Invariant Integrity Engine (Compatible with All Executors)
+    local function {v_inv_chk}()
+        local m_test = (math.floor(math.sin(1.57079632679) * 100) == 100)
+        local c_test = (math.cos(0) == 1)
+        local b_test = ({v_bxor}(15, 7) == 8)
+        return m_test and c_test and b_test
+    end
+
+    -- Virtual Machine State Variables
+    local {v_seed} = {k_seed}
+    local {v_mult} = {k_mult}
+    local {v_inc} = {k_inc}
+    local {v_shift} = {k_shift}
+    local {v_mask} = {k_mask}
+    local {v_poly1} = {k_poly1}
+    local {v_chunks} = {chunks_lua}
+
     local {v_out} = {{}}
     local {v_state} = {v_seed}
     local {v_idx} = 0
+    local {v_disp} = {st_init}
 
-    for c_idx = 1, #{v_chunks} do
-        local chunk = {v_chunks}[c_idx]
-        for b_idx = 1, #chunk do
-            {v_state} = ({v_state} * {v_mult} + {v_inc}) % 256
-            local raw = chunk[b_idx]
+    -- VM State Machine Dispatcher
+    while {v_disp} ~= 0 do
+        if {v_disp} == {st_init} then
+            if {v_inv_chk}() then
+                {v_disp} = {st_check}
+            else
+                {v_disp} = {st_trap}
+            end
+        elseif {v_disp} == {st_check} then
+            {v_disp} = {st_unpack}
+        elseif {v_disp} == {st_unpack} then
+            for c_idx = 1, #{v_chunks} do
+                local chunk = {v_chunks}[c_idx]
+                for b_idx = 1, #chunk do
+                    {v_state} = ({v_state} * {v_mult} + {v_inc} + {v_idx} * {v_poly1}) % 256
+                    local raw = chunk[b_idx]
+                    local pos_key = ({v_idx} * 7 + 13) % 256
+                    
+                    local step1 = {v_bxor}(raw, pos_key)
+                    local step2 = {v_bxor}(step1, {v_mask})
+                    local step3 = {v_bxor}(step2, {v_state})
+                    local unrotated = {v_rol}(step3, {v_shift})
+                    
+                    {v_out}[#{v_out} + 1] = {v_char}(unrotated)
+                    {v_idx} = {v_idx} + 1
+                end
+            end
+            {v_disp} = {st_exec}
+        elseif {v_disp} == {st_exec} then
+            local payload_str = {v_concat}({v_out})
             
-            local pos_key = ({v_idx} + 13) % 256
-            {v_idx} = {v_idx} + 1
-            
-            local step1 = {v_bxor}(raw, pos_key)
-            local step2 = {v_bxor}(step1, {v_mask})
-            local step3 = {v_bxor}(step2, {v_state})
-            local unrotated = {v_rol}(step3, {v_shift})
-            
-            {v_out}[#{v_out} + 1] = {v_char}(unrotated)
+            -- Immediate Memory Sanitization
+            {v_out} = nil
+            {v_chunks} = nil
+            if collectgarbage then collectgarbage("collect") end
+
+            local {v_res}, {v_err} = {v_loader}(payload_str, "=[ClassicfuscatorVM]")
+            payload_str = nil
+
+            if type({v_res}) == "function" then
+                {v_disp} = 0
+                return {v_res}(...)
+            else
+                {v_disp} = 0
+                error("[Classicfuscator] Syntax error in payload: " .. tostring({v_err}), 0)
+            end
+        elseif {v_disp} == {st_trap} then
+            {v_disp} = 0
+            return (function() end)()
         end
-    end
-
-    local {v_res}, {v_err} = {v_loader}({v_concat}({v_out}), "=[Classicfuscator]")
-
-    if type({v_res}) == "function" then
-        return {v_res}(...)
-    else
-        error("[Classicfuscator] Syntax Error: " .. tostring({v_err}), 0)
     end
 end)(...)"""
 
     return lua_stub.strip()
-
-
-def sanitize_filename(name: str) -> str:
-    """Preserves .lua extension cleanly."""
-    name = name.strip()
-    if name.endswith(".lua"):
-        base = name[:-4]
-    else:
-        base = name
-    
-    clean_base = re.sub(r"[^a-zA-Z0-9_-]", "_", base)
-    if not clean_base:
-        clean_base = "script_" + str(uuid.uuid4())[:6]
-        
-    return clean_base + ".lua"
 
 
 HTML_TEMPLATE = """<!DOCTYPE html>
@@ -181,152 +207,70 @@ HTML_TEMPLATE = """<!DOCTYPE html>
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Classicfuscator - Free Online Roblox & Luau Script Obfuscator</title>
-
-    <!-- Google Site Verification Tag -->
-    <meta name="google-site-verification" content="NlXE_EkemBQKsLMYzO6UROuRTcYAlRiW7iaVdou1QBM" />
-
-    <!-- SEO Meta Tags -->
-    <meta name="description" content="Classicfuscator is a free online Lua and Luau script obfuscator. Secure your Roblox scripts with multi-layer encryption and auto-loader generation.">
-    <meta name="keywords" content="lua obfuscator, roblox obfuscator, luau obfuscator, script obfuscator, roblox script protection, classicfuscator">
-    <meta name="robots" content="index, follow">
-
-    <!-- Open Graph Meta Tags (Discord & Social Cards) -->
-    <meta property="og:title" content="Classicfuscator - Free Lua & Luau Script Obfuscator">
-    <meta property="og:description" content="Protect your Roblox scripts instantly. Generate secure 1-line remote loaders with anti-hooking technology.">
-    <meta property="og:type" content="website">
-
+    <title>Classicfuscator Enterprise - Hardened VM</title>
     <style>
         * { box-sizing: border-box; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
-        body { background-color: #f0f7ff; color: #1e293b; margin: 0; padding: 40px 20px; display: flex; justify-content: center; align-items: center; min-height: 100vh; }
-        .card { background: #ffffff; border-radius: 20px; box-shadow: 0 12px 40px rgba(0, 112, 243, 0.08); width: 100%; max-width: 620px; padding: 36px; border: 1px solid #e2e8f0; position: relative; }
-        .header-bar { display: flex; justify-content: space-between; align-items: center; margin-bottom: 24px; }
-        h1 { font-size: 26px; font-weight: 800; color: #0070f3; margin: 0; letter-spacing: -0.5px; }
+        body { background-color: #0b132b; color: #f8fafc; margin: 0; padding: 40px 20px; display: flex; justify-content: center; align-items: center; min-height: 100vh; }
+        .card { background: #1c2541; border-radius: 16px; box-shadow: 0 20px 50px rgba(0, 0, 0, 0.5); width: 100%; max-width: 640px; padding: 32px; border: 1px solid #3a506b; }
+        h1 { font-size: 24px; font-weight: 800; color: #6fffe9; margin: 0 0 20px 0; }
         .form-group { margin-bottom: 18px; }
-        .section-label { font-size: 14px; font-weight: 600; color: #475569; margin-bottom: 8px; display: block; }
-        .text-input { width: 100%; padding: 12px 14px; border: 1px solid #cbd5e1; border-radius: 10px; font-size: 14px; outline: none; }
-        .text-input:focus { border-color: #0070f3; box-shadow: 0 0 0 3px rgba(0, 112, 243, 0.15); }
-        textarea { width: 100%; height: 160px; border: 1px solid #cbd5e1; border-radius: 12px; padding: 14px; font-family: "Fira Code", monospace, sans-serif; font-size: 13px; resize: vertical; outline: none; background-color: #ffffff; color: #0f172a; }
-        textarea:focus { border-color: #0070f3; box-shadow: 0 0 0 3px rgba(0, 112, 243, 0.15); }
-        .btn { width: 100%; padding: 14px; background-color: #0070f3; color: white; border: none; border-radius: 10px; font-size: 15px; font-weight: 700; cursor: pointer; margin-top: 14px; box-shadow: 0 4px 14px rgba(0, 112, 243, 0.25); transition: all 0.2s ease; }
-        .btn:hover { background-color: #005bb5; transform: translateY(-1px); }
-        .btn-copy-loader { background-color: #0070f3; }
+        .section-label { font-size: 13px; font-weight: 600; color: #a5a5a5; margin-bottom: 8px; display: block; }
+        textarea { width: 100%; height: 160px; border: 1px solid #3a506b; border-radius: 10px; padding: 14px; font-family: monospace; font-size: 13px; outline: none; background-color: #0b132b; color: #6fffe9; }
+        textarea:focus { border-color: #5bc0be; }
+        .btn { width: 100%; padding: 14px; background-color: #5bc0be; color: #0b132b; border: none; border-radius: 8px; font-size: 15px; font-weight: 700; cursor: pointer; margin-top: 10px; transition: all 0.2s ease; }
+        .btn:hover { background-color: #6fffe9; }
         .output-container { margin-top: 24px; display: none; }
-        .loader-box { background: #f0f7ff; border: 1px solid #0070f3; border-radius: 12px; padding: 16px; }
+        .loader-box { background: #0b132b; border: 1px solid #5bc0be; border-radius: 10px; padding: 16px; }
     </style>
 </head>
 <body>
     <div class="card">
-        <div class="header-bar">
-            <h1>Classicfuscator</h1>
-        </div>
+        <h1>🛡️ Classicfuscator Hardened VM</h1>
 
         <div class="form-group">
-            <span class="section-label">Custom Script Name:</span>
-            <input type="text" id="filenameInput" class="text-input" placeholder="my_script.lua" value="my_script.lua" onfocus="playSoftTap()">
+            <span class="section-label">Paste Lua / Luau Source:</span>
+            <textarea id="input" placeholder="print('Hello World')"></textarea>
         </div>
 
-        <div class="form-group">
-            <span class="section-label">Paste Lua Code:</span>
-            <textarea id="input" placeholder="print('Hello World!')" onfocus="playSoftTap()"></textarea>
-        </div>
-
-        <button class="btn" id="obfuscateBtn" onclick="obfuscate()">Obfuscate & Generate Loader</button>
+        <button class="btn" onclick="obfuscate()">Obfuscate & Generate Loader</button>
 
         <div class="output-container" id="outputWrapper">
             <div class="loader-box">
-                <span class="section-label" style="color: #0070f3; font-weight: 700;">🚀 Roblox Loader Script:</span>
+                <span class="section-label" style="color: #6fffe9;">🚀 Roblox Loader Script:</span>
                 <textarea id="loaderOutput" style="height: 70px;" readonly></textarea>
-                <button class="btn btn-copy-loader" onclick="copyLoader()">Copy Roblox Loader</button>
+                <button class="btn" style="background-color: #3a506b; color: #ffffff;" onclick="copyLoader()">Copy Loader</button>
             </div>
         </div>
     </div>
 
     <script>
-        let audioCtx = null;
-
-        function initAudio() {
-            if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-        }
-
-        function playBubblePop() {
-            initAudio();
-            const osc = audioCtx.createOscillator();
-            const gain = audioCtx.createGain();
-            osc.type = 'sine';
-            osc.frequency.setValueAtTime(400, audioCtx.currentTime);
-            osc.frequency.exponentialRampToValueAtTime(800, audioCtx.currentTime + 0.04);
-            gain.gain.setValueAtTime(0.15, audioCtx.currentTime);
-            gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + 0.05);
-            osc.connect(gain);
-            gain.connect(audioCtx.destination);
-            osc.start();
-            osc.stop(audioCtx.currentTime + 0.05);
-        }
-
-        function playSoftTap() {
-            initAudio();
-            const osc = audioCtx.createOscillator();
-            const gain = audioCtx.createGain();
-            osc.type = 'triangle';
-            osc.frequency.setValueAtTime(120, audioCtx.currentTime);
-            osc.frequency.exponentialRampToValueAtTime(30, audioCtx.currentTime + 0.03);
-            gain.gain.setValueAtTime(0.08, audioCtx.currentTime);
-            gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + 0.03);
-            osc.connect(gain);
-            gain.connect(audioCtx.destination);
-            osc.start();
-            osc.stop(audioCtx.currentTime + 0.03);
-        }
-
-        function playAmbientChime() {
-            initAudio();
-            const freqs = [523.25, 659.25, 783.99, 1046.50];
-            freqs.forEach((freq, idx) => {
-                const osc = audioCtx.createOscillator();
-                const gain = audioCtx.createGain();
-                osc.type = 'sine';
-                osc.frequency.setValueAtTime(freq, audioCtx.currentTime + (idx * 0.04));
-                gain.gain.setValueAtTime(0.05, audioCtx.currentTime + (idx * 0.04));
-                gain.gain.exponentialRampToValueAtTime(0.0001, audioCtx.currentTime + (idx * 0.04) + 0.4);
-                osc.connect(gain);
-                gain.connect(audioCtx.destination);
-                osc.start(audioCtx.currentTime + (idx * 0.04));
-                osc.stop(audioCtx.currentTime + (idx * 0.04) + 0.4);
-            });
-        }
-
         async function obfuscate() {
-            playSoftTap();
             const inputCode = document.getElementById('input').value;
-            const filename = document.getElementById('filenameInput').value;
             const outputWrapper = document.getElementById('outputWrapper');
             const loaderArea = document.getElementById('loaderOutput');
             
             outputWrapper.style.display = "block";
-            loaderArea.value = "-- Obfuscating & generating loader, please wait...";
+            loaderArea.value = "-- Processing Hardened VM Cipher...";
 
             try {
                 const response = await fetch('/obfuscate', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ code: inputCode, filename: filename })
+                    body: JSON.stringify({ code: inputCode })
                 });
 
                 const data = await response.json();
                 loaderArea.value = data.loader || "-- Error generating loader.";
-                playAmbientChime();
             } catch (err) {
-                loaderArea.value = "-- Loader generation failed: " + err;
+                loaderArea.value = "-- Generation failed: " + err;
             }
         }
 
         function copyLoader() {
-            playBubblePop();
             const loaderArea = document.getElementById('loaderOutput');
             loaderArea.select();
             navigator.clipboard.writeText(loaderArea.value);
-            alert('Roblox Loader copied to clipboard!');
+            alert('Loader copied to clipboard!');
         }
     </script>
 </body>
@@ -339,89 +283,72 @@ def index():
     return render_template_string(HTML_TEMPLATE)
 
 
-@app.route("/robots.txt", methods=["GET"])
-def robots():
-    """Tells search engine crawlers that the site is indexable."""
-    content = "User-agent: *\nAllow: /\nSitemap: " + request.host_url.rstrip("/") + "/sitemap.xml\n"
-    return Response(content, mimetype="text/plain")
-
-
-@app.route("/sitemap.xml", methods=["GET"])
-def sitemap():
-    """Generates XML Sitemap for Googlebot."""
-    host = request.host_url.rstrip("/")
-    if host.startswith("http://") and not ("127.0.0.1" in host or "localhost" in host):
-        host = host.replace("http://", "https://", 1)
-        
-    xml_content = f"""<?xml version="1.0" encoding="UTF-8"?>
-<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
-   <url>
-      <loc>{host}/</loc>
-      <priority>1.00</priority>
-   </url>
-</urlset>"""
-    return Response(xml_content, mimetype="application/xml")
-
-
 @app.route("/obfuscate", methods=["POST"])
 def process():
     data = request.get_json(silent=True) or {}
     raw_code = data.get("code", "")
-    raw_filename = data.get("filename", "my_script.lua")
     
-    clean_filename = sanitize_filename(raw_filename)
     obfuscated_code = obfuscate_lua(raw_code)
     
-    # Save to RAM
-    SCRIPT_CACHE[clean_filename] = obfuscated_code
+    # Dynamic 32-character Hex Token
+    token = uuid.uuid4().hex
     
-    # Save to Disk
-    file_path = os.path.join(SAVED_DIR, clean_filename)
+    # Store in RAM Cache
+    SCRIPT_CACHE[token] = {
+        "code": obfuscated_code,
+        "created_at": time.time()
+    }
+    
+    # Store on Disk
+    file_path = os.path.join(SAVED_DIR, f"{token}.lua")
     with open(file_path, "w", encoding="utf-8") as f:
         f.write(obfuscated_code)
     
-    # Enforce HTTPS
+    # Enforce HTTPS URL
     domain_url = request.host_url.rstrip("/")
     if domain_url.startswith("http://") and not ("127.0.0.1" in domain_url or "localhost" in domain_url):
         domain_url = domain_url.replace("http://", "https://", 1)
 
-    loader_script = f'loadstring(game:HttpGet("{domain_url}/{clean_filename}"))()'
+    loader_script = f'loadstring(game:HttpGet("{domain_url}/raw/{token}"))()'
 
     return jsonify({
         "loader": loader_script,
-        "filename": clean_filename
+        "token": token
     })
 
 
-@app.route("/<path:filename>", methods=["GET"])
-def serve_script(filename):
-    """Serves the obfuscated script payload to Roblox when requested."""
-    possible_names = [
-        filename,
-        filename + ".lua" if not filename.endswith(".lua") else filename,
-        filename.replace(".lua", "") + ".lua"
-    ]
-    
-    # Check RAM Cache
-    for name in possible_names:
-        if name in SCRIPT_CACHE:
-            res = Response(SCRIPT_CACHE[name], mimetype="text/plain")
-            res.headers["Access-Control-Allow-Origin"] = "*"
-            res.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
-            return res
+@app.route("/raw/<token>", methods=["GET"])
+def serve_script(token):
+    """
+    Serves payload to Roblox client while blocking web crawlers/browsers.
+    """
+    user_agent = request.headers.get("User-Agent", "")
 
-    # Check Disk Storage
-    for name in possible_names:
-        file_path = os.path.join(SAVED_DIR, name)
+    # Roblox Client Check
+    is_local = "127.0.0.1" in request.host or "localhost" in request.host
+    if not is_local and "Roblox" not in user_agent:
+        return Response("-- Error 403: Access Denied. Requests must originate from Roblox Client.", status=403, mimetype="text/plain")
+
+    code = None
+
+    # Check RAM Cache
+    if token in SCRIPT_CACHE:
+        code = SCRIPT_CACHE[token]["code"]
+    else:
+        # Check Disk Storage
+        file_path = os.path.join(SAVED_DIR, f"{token}.lua")
         if os.path.exists(file_path):
             with open(file_path, "r", encoding="utf-8") as f:
                 code = f.read()
-            res = Response(code, mimetype="text/plain")
-            res.headers["Access-Control-Allow-Origin"] = "*"
-            res.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
-            return res
 
-    return Response("-- Error: Script not found on server.", status=404, mimetype="text/plain")
+    if code:
+        res = Response(code, mimetype="text/plain")
+        res.headers["Access-Control-Allow-Origin"] = "*"
+        res.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+        res.headers["Pragma"] = "no-cache"
+        return res
+
+    return Response("-- Error 404: Invalid or Expired Token.", status=404, mimetype="text/plain")
 
 
 if __name__ == "__main__":
