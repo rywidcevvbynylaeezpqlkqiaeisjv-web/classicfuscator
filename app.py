@@ -1,9 +1,7 @@
-import json
 import math
 import os
 import random
 import re
-import secrets
 import string
 import time
 import uuid
@@ -18,12 +16,6 @@ SCRIPT_CACHE = {}
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 SAVED_DIR = os.path.join(BASE_DIR, "saved_scripts")
 os.makedirs(SAVED_DIR, exist_ok=True)
-
-
-def generate_password(length=55) -> str:
-    """Generates a secure alphanumeric password of specified length."""
-    alphabet = string.ascii_letters + string.digits
-    return "".join(secrets.choice(alphabet) for _ in range(length))
 
 
 def random_id(prefix=""):
@@ -217,61 +209,163 @@ HTML_TEMPLATE = """<!DOCTYPE html>
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Classicfuscator</title>
     <style>
-        * { box-sizing: border-box; font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
-        body { background-color: #edf3fa; color: #1f2937; margin: 0; padding: 40px 20px; display: flex; justify-content: center; align-items: center; min-height: 100vh; }
-        .card { background: #ffffff; border-radius: 24px; box-shadow: 0 10px 40px rgba(0, 0, 0, 0.04); width: 100%; max-width: 480px; padding: 36px 32px; }
-        h1 { font-size: 28px; font-weight: 800; color: #0066ff; margin: 0 0 24px 0; }
-        .form-group { margin-bottom: 20px; }
-        .section-label { font-size: 14px; font-weight: 700; color: #374151; margin-bottom: 8px; display: block; }
-        input[type="text"], textarea { width: 100%; border: 1px solid #e5e7eb; border-radius: 12px; padding: 14px 16px; font-size: 14px; outline: none; background-color: #ffffff; color: #111827; transition: border-color 0.2s ease, box-shadow 0.2s ease; }
-        textarea { height: 180px; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; resize: vertical; }
-        input[type="text"]:focus, textarea:focus { border-color: #0066ff; box-shadow: 0 0 0 3px rgba(0, 102, 255, 0.1); }
-        .btn { width: 100%; padding: 16px; background-color: #0066ff; color: #ffffff; border: none; border-radius: 12px; font-size: 15px; font-weight: 700; cursor: pointer; margin-top: 10px; transition: background-color 0.2s ease; }
-        .btn:hover { background-color: #0052cc; }
+        * { box-sizing: border-box; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }
+        body { 
+            background-color: #f2f4f8; 
+            color: #1e293b; 
+            margin: 0; 
+            padding: 40px 20px; 
+            display: flex; 
+            justify-content: center; 
+            align-items: center; 
+            min-height: 100vh; 
+        }
+        .card { 
+            background: #ffffff; 
+            border-radius: 20px; 
+            box-shadow: 0 4px 20px rgba(0, 0, 0, 0.03); 
+            width: 100%; 
+            max-width: 520px; 
+            padding: 36px 32px; 
+            border: 1px solid #eef0f4; 
+        }
+        h1 { 
+            font-size: 28px; 
+            font-weight: 700; 
+            color: #1a1a1a; 
+            margin: 0 0 24px 0; 
+            letter-spacing: -0.3px;
+        }
+        .file-upload-box {
+            border: 2px dashed #0070f3;
+            border-radius: 12px;
+            padding: 20px;
+            background-color: #ffffff;
+            margin-bottom: 20px;
+        }
+        .file-upload-title {
+            font-size: 16px;
+            font-weight: 700;
+            color: #1a1a1a;
+            margin-bottom: 12px;
+            display: block;
+        }
+        .file-input-wrapper {
+            display: flex;
+            align-items: center;
+        }
+        input[type="file"] {
+            font-size: 14px;
+            color: #475569;
+        }
+        .or-text {
+            font-size: 15px;
+            font-weight: 400;
+            color: #1e293b;
+            margin-bottom: 12px;
+        }
+        textarea { 
+            width: 100%; 
+            height: 180px;
+            border: 1px solid #dcdfe6; 
+            border-radius: 12px; 
+            padding: 14px; 
+            font-size: 14px; 
+            font-family: monospace;
+            outline: none; 
+            background-color: #ffffff; 
+            color: #1e293b; 
+            transition: border-color 0.2s ease, box-shadow 0.2s ease;
+            resize: vertical;
+        }
+        textarea:focus { 
+            border-color: #0070f3; 
+            box-shadow: 0 0 0 3px rgba(0, 112, 243, 0.12);
+        }
+        .btn { 
+            width: 100%; 
+            padding: 14px; 
+            background-color: #0070f3; 
+            color: #ffffff; 
+            border: none; 
+            border-radius: 12px; 
+            font-size: 16px; 
+            font-weight: 600; 
+            cursor: pointer; 
+            margin-top: 20px; 
+            transition: background-color 0.2s ease;
+            box-shadow: 0 4px 12px rgba(0, 112, 243, 0.2);
+        }
+        .btn:hover { 
+            background-color: #005bb5; 
+        }
         .output-container { margin-top: 24px; display: none; }
-        .loader-box { background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 12px; padding: 16px; }
+        .loader-box { 
+            background: #f8fafc; 
+            border: 1px solid #e2e8f0; 
+            border-radius: 12px; 
+            padding: 16px; 
+        }
+        .section-label {
+            font-size: 14px;
+            font-weight: 600;
+            color: #0070f3;
+            margin-bottom: 8px;
+            display: block;
+        }
     </style>
 </head>
 <body>
     <div class="card">
         <h1>Classicfuscator</h1>
 
-        <div class="form-group">
-            <span class="section-label">Custom Script Name:</span>
-            <input type="text" id="scriptName" value="my_script.lua" placeholder="my_script.lua" />
+        <div class="file-upload-box">
+            <span class="file-upload-title">Upload a Lua File:</span>
+            <div class="file-input-wrapper">
+                <input type="file" id="luaFileInput" accept=".lua,.txt" onchange="handleFileUpload(event)">
+            </div>
         </div>
 
-        <div class="form-group">
-            <span class="section-label">Paste Lua Code:</span>
-            <textarea id="input" placeholder="print('Hello World!')">print('Hello World!')</textarea>
-        </div>
+        <div class="or-text">Or paste your Roblox Lua code here:</div>
 
-        <button class="btn" onclick="obfuscate()">Obfuscate & Generate Loader</button>
+        <textarea id="input" placeholder=""></textarea>
+
+        <button class="btn" onclick="obfuscate()">Start Obfuscation</button>
 
         <div class="output-container" id="outputWrapper">
             <div class="loader-box">
-                <span class="section-label" style="color: #0066ff;">Generated Roblox Loader:</span>
-                <textarea id="loaderOutput" style="height: 90px;" readonly></textarea>
-                <button class="btn" style="background-color: #374151; margin-top: 10px;" onclick="copyLoader()">Copy Loader</button>
+                <span class="section-label">Roblox Loader Script:</span>
+                <textarea id="loaderOutput" style="height: 75px; background: #ffffff;" readonly></textarea>
+                <button class="btn" style="background-color: #334155; color: #ffffff; box-shadow: none; margin-top: 10px;" onclick="copyLoader()">Copy Loader</button>
             </div>
         </div>
     </div>
 
     <script>
+        function handleFileUpload(event) {
+            const file = event.target.files[0];
+            if (file) {
+                const reader = new FileReader();
+                reader.onload = function(e) {
+                    document.getElementById('input').value = e.target.result;
+                };
+                reader.readAsText(file);
+            }
+        }
+
         async function obfuscate() {
             const inputCode = document.getElementById('input').value;
-            const scriptName = document.getElementById('scriptName').value;
             const outputWrapper = document.getElementById('outputWrapper');
             const loaderArea = document.getElementById('loaderOutput');
             
             outputWrapper.style.display = "block";
-            loaderArea.value = "-- Processing script...";
+            loaderArea.value = "-- Processing Hardened VM Cipher...";
 
             try {
                 const response = await fetch('/obfuscate', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ code: inputCode, script_name: scriptName })
+                    body: JSON.stringify({ code: inputCode })
                 });
 
                 const data = await response.json();
@@ -292,43 +386,6 @@ HTML_TEMPLATE = """<!DOCTYPE html>
 </html>
 """
 
-PASSWORD_GATE_TEMPLATE = """<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Access Protected Script</title>
-    <style>
-        * { box-sizing: border-box; font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
-        body { background-color: #edf3fa; color: #1f2937; margin: 0; padding: 40px 20px; display: flex; justify-content: center; align-items: center; min-height: 100vh; }
-        .card { background: #ffffff; border-radius: 24px; box-shadow: 0 10px 40px rgba(0, 0, 0, 0.04); width: 100%; max-width: 480px; padding: 36px 32px; }
-        h1 { font-size: 22px; font-weight: 800; color: #0066ff; margin: 0 0 12px 0; text-align: center; }
-        p { font-size: 14px; color: #6b7280; text-align: center; margin-bottom: 20px; }
-        input[type="text"] { width: 100%; border: 1px solid #e5e7eb; border-radius: 12px; padding: 14px 16px; font-size: 14px; outline: none; background-color: #ffffff; color: #111827; margin-bottom: 16px; }
-        input[type="text"]:focus { border-color: #0066ff; box-shadow: 0 0 0 3px rgba(0, 102, 255, 0.1); }
-        .btn { width: 100%; padding: 16px; background-color: #0066ff; color: #ffffff; border: none; border-radius: 12px; font-size: 15px; font-weight: 700; cursor: pointer; transition: background-color 0.2s ease; }
-        .btn:hover { background-color: #0052cc; }
-        .error { color: #ef4444; font-size: 14px; margin-bottom: 16px; text-align: center; font-weight: 600; }
-    </style>
-</head>
-<body>
-    <div class="card">
-        <h1>Protected Script Access</h1>
-        <p>Please enter the 55-character password to unlock the script.</p>
-
-        {% if error %}
-            <div class="error">{{ error }}</div>
-        {% endif %}
-
-        <form method="GET" action="">
-            <input type="text" name="password" placeholder="Enter password..." required maxlength="55" autocomplete="off" />
-            <button type="submit" class="btn">Unlock & View Script</button>
-        </form>
-    </div>
-</body>
-</html>
-"""
-
 
 @app.route("/", methods=["GET"])
 def index():
@@ -342,29 +399,26 @@ def process():
     
     obfuscated_code = obfuscate_lua(raw_code)
     
-    # Dynamic 32-character Hex Token & 55-character Password
+    # Dynamic 32-character Hex Token
     token = uuid.uuid4().hex
-    password = generate_password(55)
     
     # Store in RAM Cache
     SCRIPT_CACHE[token] = {
         "code": obfuscated_code,
-        "password": password,
         "created_at": time.time()
     }
     
     # Store on Disk
-    file_path = os.path.join(SAVED_DIR, f"{token}.json")
+    file_path = os.path.join(SAVED_DIR, f"{token}.lua")
     with open(file_path, "w", encoding="utf-8") as f:
-        json.dump({"code": obfuscated_code, "password": password}, f)
+        f.write(obfuscated_code)
     
     # Enforce HTTPS URL
     domain_url = request.host_url.rstrip("/")
     if domain_url.startswith("http://") and not ("127.0.0.1" in domain_url or "localhost" in domain_url):
         domain_url = domain_url.replace("http://", "https://", 1)
 
-    # Password embedded inside the game:HttpGet URL
-    loader_script = f'loadstring(game:HttpGet("{domain_url}/raw/{token}?password={password}"))()'
+    loader_script = f'loadstring(game:HttpGet("{domain_url}/raw/{token}"))()'
 
     return jsonify({
         "loader": loader_script,
@@ -372,45 +426,38 @@ def process():
     })
 
 
-@app.route("/raw/<token>", methods=["GET", "POST"])
+@app.route("/raw/<token>", methods=["GET"])
 def serve_script(token):
     """
-    Serves payload when accessed via game:HttpGet containing the password query parameter.
-    Displays password prompt interface if accessed via browser without a valid password.
+    Serves payload to Roblox client while blocking web crawlers/browsers.
     """
-    # Retrieve script record from cache or disk
-    record = SCRIPT_CACHE.get(token)
-    if not record:
-        file_path = os.path.join(SAVED_DIR, f"{token}.json")
+    user_agent = request.headers.get("User-Agent", "")
+
+    # Roblox Client Check
+    is_local = "127.0.0.1" in request.host or "localhost" in request.host
+    if not is_local and "Roblox" not in user_agent:
+        return Response("-- Error 403: Access Denied. Requests must originate from Roblox Client.", status=403, mimetype="text/plain")
+
+    code = None
+
+    # Check RAM Cache
+    if token in SCRIPT_CACHE:
+        code = SCRIPT_CACHE[token]["code"]
+    else:
+        # Check Disk Storage
+        file_path = os.path.join(SAVED_DIR, f"{token}.lua")
         if os.path.exists(file_path):
-            try:
-                with open(file_path, "r", encoding="utf-8") as f:
-                    record = json.load(f)
-            except Exception:
-                record = None
+            with open(file_path, "r", encoding="utf-8") as f:
+                code = f.read()
 
-    if not record:
-        return Response("-- Error 404: Invalid or Expired Token.", status=404, mimetype="text/plain")
-
-    target_password = record.get("password")
-    code = record.get("code")
-
-    # Get password attempt from query parameters or form submission
-    provided_password = request.args.get("password") or request.form.get("password")
-
-    # If valid password provided in game:HttpGet or form, return the raw script
-    if provided_password and secrets.compare_digest(provided_password, target_password):
+    if code:
         res = Response(code, mimetype="text/plain")
         res.headers["Access-Control-Allow-Origin"] = "*"
         res.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
         res.headers["Pragma"] = "no-cache"
         return res
 
-    # If invalid password attempt was made
-    error_msg = "Incorrect Password. Access Denied." if provided_password else None
-
-    # Render HTML Password Gate
-    return render_template_string(PASSWORD_GATE_TEMPLATE, error=error_msg), 401 if error_msg else 200
+    return Response("-- Error 404: Invalid or Expired Token.", status=404, mimetype="text/plain")
 
 
 if __name__ == "__main__":
