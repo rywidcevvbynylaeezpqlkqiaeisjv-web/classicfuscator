@@ -1,3 +1,4 @@
+import base64
 import math
 import os
 import random
@@ -5,92 +6,319 @@ import re
 import sqlite3
 import time
 import uuid
-import base64
+import threading
+from collections import defaultdict, deque
 from flask import Flask, jsonify, render_template_string, request, Response
 from werkzeug.middleware.proxy_fix import ProxyFix
 
 app = Flask(__name__)
 app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1, x_prefix=1)
 
-CUSTOM_DOMAIN = "" # Leave blank to auto-detect
+CUSTOM_DOMAIN = ""  # Leave blank to auto-detect
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 SAVED_DIR = os.path.join(BASE_DIR, "saved_scripts")
 DB_PATH = os.path.join(BASE_DIR, "database.db")
+
+# Runtime limits
+MAX_SOURCE_BYTES = 1024 * 1024       # 1 MiB per compilation
+SCRIPT_TTL = 15 * 60                  # 15 minutes
+CLEANUP_INTERVAL = 60                 # 1 minute
+RATE_WINDOW = 60                      # 1 minute
+RATE_LIMIT = 30                       # compilations/IP/minute
+
 os.makedirs(SAVED_DIR, exist_ok=True)
+
 SCRIPT_CACHE = {}
+CACHE_LOCK = threading.RLock()
+RATE_STATE = defaultdict(deque)
+RATE_LOCK = threading.RLock()
+
+
+def cleanup_expired_scripts():
+    """Thread-safe TTL cleanup for generated scripts."""
+    while True:
+        time.sleep(CLEANUP_INTERVAL)
+        cutoff = time.time() - SCRIPT_TTL
+
+        with CACHE_LOCK:
+            expired = [
+                token for token, data in SCRIPT_CACHE.items()
+                if data.get("created_at", 0) < cutoff
+            ]
+
+            for token in expired:
+                SCRIPT_CACHE.pop(token, None)
+                file_path = os.path.join(SAVED_DIR, f"{token}.lua")
+                try:
+                    if os.path.isfile(file_path):
+                        os.remove(file_path)
+                except OSError:
+                    pass
+
+
+threading.Thread(
+    target=cleanup_expired_scripts,
+    name="classicfuscator-cleanup",
+    daemon=True,
+).start()
+
 
 def init_db():
+    """Keep the existing database initialized for backwards compatibility."""
     conn = sqlite3.connect(DB_PATH)
-    c = conn.cursor()
-    c.execute("""CREATE TABLE IF NOT EXISTS scripts (token TEXT PRIMARY KEY, code TEXT, created_at REAL)""")
-    conn.commit()
-    conn.close()
+    try:
+        conn.execute(
+            """CREATE TABLE IF NOT EXISTS scripts
+               (token TEXT PRIMARY KEY, code TEXT, created_at REAL)"""
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
 
 init_db()
 
-def gen_id(prefix="", length=random.randint(16, 24)):
-    return prefix + "".join(random.choices(["I", "l", "1", "_"], k=length))
+
+def gen_id(length=None):
+    """Generate a build-specific identifier without relying on a mutable default."""
+    if length is None:
+        length = secrets.randbelow(7) + 12
+    # Keep identifiers Lua-safe while avoiding the very obvious I/l/1/O/0-only pattern.
+    first = random.choice("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ_")
+    rest = "".join(
+        random.choice("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_")
+        for _ in range(max(1, length - 1))
+    )
+    return first + rest
+
+
+def _lua_lex_number_safe(source):
+    """
+    Transform integer/decimal literals without touching:
+      - quoted strings
+      - long strings
+      - line comments
+      - block comments
+      - identifiers
+      - hexadecimal literals
+    This is intentionally a small lexer, not a full Lua parser.
+    """
+    out = []
+    i = 0
+    n = len(source)
+
+    def read_quoted(pos, quote):
+        j = pos + 1
+        while j < n:
+            if source[j] == "\\\\":
+                j += 2
+                continue
+            if source[j] == quote:
+                return j + 1
+            j += 1
+        return n
+
+    def read_long_bracket(pos):
+        # Supports Lua's [=[ ... ]=] style long strings/comments.
+        m = re.match(r"\\[(=*)\\[", source[pos:])
+        if not m:
+            return None
+        eq = m.group(1)
+        close = "]" + eq + "]"
+        end_pos = source.find(close, pos + len(m.group(0)))
+        return n if end_pos < 0 else end_pos + len(close)
+
+    while i < n:
+        # Quoted strings
+        if source[i] in ("'", '"'):
+            j = read_quoted(i, source[i])
+            out.append(source[i:j])
+            i = j
+            continue
+
+        # Long strings / comments
+        long_end = read_long_bracket(i)
+        if long_end is not None:
+            out.append(source[i:long_end])
+            i = long_end
+            continue
+
+        # Comments
+        if source.startswith("--", i):
+            long_comment_end = read_long_bracket(i + 2)
+            if long_comment_end is not None:
+                out.append(source[i:long_comment_end])
+                i = long_comment_end
+                continue
+
+            line_end = source.find("\\n", i + 2)
+            if line_end < 0:
+                out.append(source[i:])
+                break
+            out.append(source[i:line_end])
+            i = line_end
+            continue
+
+        # Decimal integer/float. Avoid identifiers and hex literals.
+        if source[i].isdigit() and not (
+            i > 0 and (source[i - 1].isalnum() or source[i - 1] == "_")
+        ):
+            m = re.match(
+                r"(?:0[xX][0-9a-fA-F]+|(?:\\d+\\.\\d*|\\d*\\.\\d+|\\d+)(?:[eE][+-]?\\d+)?)",
+                source[i:],
+            )
+            if m:
+                token = m.group(0)
+                if not token.lower().startswith("0x") and token.isdigit():
+                    value = int(token)
+                    offset = secrets.randbelow(9000) + 1000
+                    out.append(f"({value + offset} - {offset})")
+                else:
+                    out.append(token)
+                i += len(token)
+                continue
+
+        out.append(source[i])
+        i += 1
+
+    return "".join(out)
+
+
+def strip_lua_comments_safe(source):
+    """Remove comments without destroying strings or long-string contents."""
+    out = []
+    i = 0
+    n = len(source)
+
+    while i < n:
+        if source[i] in ("'", '"'):
+            quote = source[i]
+            j = i + 1
+            while j < n:
+                if source[j] == "\\\\":
+                    j += 2
+                    continue
+                if source[j] == quote:
+                    j += 1
+                    break
+                j += 1
+            out.append(source[i:j])
+            i = j
+            continue
+
+        m = re.match(r"\\[(=*)\\[", source[i:])
+        if m:
+            eq = m.group(1)
+            close = "]" + eq + "]"
+            end = source.find(close, i + len(m.group(0)))
+            end = n if end < 0 else end + len(close)
+            out.append(source[i:end])
+            i = end
+            continue
+
+        if source.startswith("--", i):
+            m = re.match(r"--\\[(=*)\\[", source[i:])
+            if m:
+                eq = m.group(1)
+                close = "]" + eq + "]"
+                end = source.find(close, i + len(m.group(0)))
+                i = n if end < 0 else end + len(close)
+            else:
+                end = source.find("\\n", i + 2)
+                i = n if end < 0 else end
+            out.append("\\n" if i < n and source[i] == "\\n" else "")
+            continue
+
+        out.append(source[i])
+        i += 1
+
+    return "".join(out)
+
+
+def inner_obfuscate(lua_code):
+    """Lexically safe lightweight source transformation."""
+    without_comments = strip_lua_comments_safe(lua_code)
+    return _lua_lex_number_safe(without_comments)
+
 
 # ==============================================================================
-# 1. CORE VM GENERATOR & POLYMORPHISM (MOBILE SAFE)
+# 2. RC4 STREAM CIPHER & CUSTOM BASE-N ENCODING
 # ==============================================================================
-
-def encode_payload(lua_code):
-    """Packs the lua code into a mutated byte-string with a rolling XOR cipher."""
-    raw_bytes = list(lua_code.encode('utf-8'))
-    seed = random.randint(10, 250)
-    mutated = []
-    c_key = seed
+def rc4_encrypt(data_string, key_string):
+    """Legacy compatibility cipher used by the existing runtime format."""
+    S = list(range(256))
+    j = 0
+    out = []
     
-    for b in raw_bytes:
-        enc = (b ^ c_key) % 256
-        mutated.append(enc)
-        c_key = (c_key + enc + 13) % 256
+    # Key-scheduling algorithm (KSA)
+    for i in range(256):
+        j = (j + S[i] + ord(key_string[i % len(key_string)])) % 256
+        S[i], S[j] = S[j], S[i]
         
-    blob = "".join(f"\\{b}" for b in mutated)
-    return blob, seed
+    # Pseudo-random generation algorithm (PRGA)
+    i = j = 0
+    for char in data_string:
+        i = (i + 1) % 256
+        j = (j + S[i]) % 256
+        S[i], S[j] = S[j], S[i]
+        out.append(chr(ord(char) ^ S[(S[i] + S[j]) % 256]))
+        
+    return "".join(out)
 
-def generate_junk_instruction():
-    """Generates mathematically sound junk code."""
-    v = gen_id()
-    val = random.randint(10, 99)
-    return f"local {v} = {val}; {v} = ({v} * 2) - {val};"
+def custom_base64_encode(data_string):
+    """Generates a totally randomized Base64 alphabet per script."""
+    standard_alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
+    custom_alphabet = list(standard_alphabet)
+    random.shuffle(custom_alphabet)
+    custom_alphabet_str = "".join(custom_alphabet)
+    
+    # Standard b64 encode
+    import base64
+    b64_std = base64.b64encode(data_string.encode('latin1')).decode('ascii')
+    
+    # Translate standard to custom
+    trans = str.maketrans(standard_alphabet, custom_alphabet_str)
+    return b64_std.translate(trans), custom_alphabet_str
 
+# ==============================================================================
+# 3. CONTROL FLOW FLATTENED VM GENERATOR
+# ==============================================================================
 def build_enterprise_vm(raw_code, settings):
-    packed_blob, xor_seed = encode_payload(raw_code)
+    # 1. Pre-obfuscate raw code
+    inner_code = inner_obfuscate(raw_code)
     
-    v_env = gen_id("Env")
-    v_blob = gen_id("Blob")
-    v_pc = gen_id("PC")
-    v_key = gen_id("Key")
-    v_buf = gen_id("Buf")
-    v_dispatch = gen_id("Disp")
-    v_state = gen_id("State")
-    v_anti = gen_id("Sec")
-    v_loader = gen_id("Ld")
-    v_byte = gen_id("B")
-    v_char = gen_id("C")
+    # 2. Generate random RC4 key
+    rc4_key = gen_id(32)
     
+    # 3. Encrypt payload with RC4
+    encrypted_payload = rc4_encrypt(inner_code, rc4_key)
+    
+    # 4. Encode with Custom Alphabet
+    encoded_payload, custom_alphabet = custom_base64_encode(encrypted_payload)
+    
+    # Random Variables
+    v_env = gen_id()
+    v_blob = gen_id()
+    v_alphabet = gen_id()
+    v_decode = gen_id()
+    v_rc4 = gen_id()
+    v_state = gen_id()
+    v_loader = gen_id()
+    v_anti = gen_id()
+
     anti_tamper = ""
     if settings.get("antihook", True):
         anti_tamper = f"""
         local function {v_anti}()
-            local _ts = tostring
-            local _type = type
+            local _g = getfenv or getgenv or _G
+            local _l = _g().loadstring or loadstring or load
+            if type(_l) ~= "function" then return false end
             
-            -- Safe Environment Checks for Mobile
-            if type(iscclosure) == "function" then
-                if not iscclosure(print) then while true do end end
-            end
-            
-            local _grm = type(getrawmetatable) == "function" and getrawmetatable or nil
-            if _grm then
-                local s, mt = pcall(function() return _grm(game) end)
-                if s and mt and _type(mt) == "table" then
-                    local nc = rawget(mt, "__namecall")
-                    if nc and _type(nc) == "function" and _ts(nc):find("hook") then
-                        return false
-                    end
+            -- debug.getinfo check to detect Hooking/Dumping
+            if type(debug) == "table" and type(debug.getinfo) == "function" then
+                local s, i = pcall(debug.getinfo, _l)
+                if s and type(i) == "table" then
+                    if i.what ~= "C" then return false end -- Hooked by a Lua script!
                 end
             end
             return true
@@ -98,177 +326,99 @@ def build_enterprise_vm(raw_code, settings):
         if not {v_anti}() then return end
         """
 
+    # Control Flow Flattening (CFF) States
     states = list(range(1, 6))
     random.shuffle(states)
-    s_init, s_read, s_decrypt, s_compile, s_exec = states
+    s_init, s_decode, s_rc4, s_compile, s_exec = states
 
     vm_lua = f"""
-local function __ENTERPRISE_INIT(...)
+local function __START()
     {anti_tamper}
-    
-    local {v_env} = setmetatable({{}}, {{
-        __index = function(_, k) 
-            local g = type(getgenv) == "function" and getgenv() or _G or {{}}
-            local f = type(getfenv) == "function" and getfenv(0) or {{}}
-            return g[k] or f[k]
-        end,
-        __newindex = function(_, k, v) 
-            local g = type(getgenv) == "function" and getgenv() or nil
-            if g then g[k] = v end
-        end,
-        __metatable = "LOCKED_ENV"
-    }})
-
-    local {v_blob} = "{packed_blob}"
-    local {v_pc} = 1
-    local {v_key} = {xor_seed}
-    local {v_buf} = {{}}
     local {v_state} = {s_init}
+    local {v_blob} = "{encoded_payload}"
+    local {v_alphabet} = "{custom_alphabet}"
+    local _k = "{rc4_key}"
+    local _res, _func
     
-    local {v_byte} = string.byte
-    local {v_char} = string.char
-    
-    -- Bulletproof Loadstring Fetcher
-    local {v_loader} = nil
-    if type(getgenv) == "function" then
-        local g = getgenv()
-        if type(g) == "table" and type(g.loadstring) == "function" then 
-            {v_loader} = g.loadstring 
-        end
-    end
-    if not {v_loader} and type(loadstring) == "function" then {v_loader} = loadstring end
-    if not {v_loader} and type(load) == "function" then {v_loader} = load end
-    
-    if type({v_loader}) ~= "function" then return warn("[Classicfuscator] Executor Missing Loadstring") end
+    local {v_loader} = (type(getgenv) == "function" and getgenv().loadstring) or loadstring or load
+    if not {v_loader} then return end
 
-    local {v_dispatch} = {{
-        [{s_init}] = function()
-            {generate_junk_instruction()}
-            {v_state} = {s_read}
-        end,
-        [{s_read}] = function()
-            if {v_pc} > #{v_blob} then
-                {v_state} = {s_compile}
-                return
-            end
-            {v_state} = {s_decrypt}
-        end,
-        [{s_decrypt}] = function()
-            local enc = {v_byte}({v_blob}, {v_pc}, {v_pc})
-            local dec
-            
-            -- Mobile Safe Bitwise XOR
-            if type(bit32) == "table" and type(bit32.bxor) == "function" then
-                dec = bit32.bxor(enc, {v_key})
-            elseif type(bit) == "table" and type(bit.bxor) == "function" then
-                dec = bit.bxor(enc, {v_key})
-            else
-                local a, b, r, p = enc, {v_key}, 0, 1
-                while a > 0 or b > 0 do
-                    if a % 2 ~= b % 2 then r = r + p end
-                    a, b, p = math.floor(a / 2), math.floor(b / 2), p * 2
+    -- Custom BaseN Decoder
+    local function {v_decode}(data, alpha)
+        data = string.gsub(data, '[^'..alpha..'=]', '')
+        local res = {{}}
+        for i = 1, #data, 4 do
+            local n = 0
+            for j = 0, 3 do
+                local c = string.sub(data, i+j, i+j)
+                if c ~= '=' then
+                    local p = string.find(alpha, c, 1, true)
+                    if p then n = n + (p - 1) * (64 ^ (3 - j)) end
                 end
-                dec = r
             end
-            
-            {v_buf}[#{v_buf}+1] = {v_char}(dec)
-            {v_key} = ({v_key} + enc + 13) % 256
-            {v_pc} = {v_pc} + 1
-            {v_state} = {s_read}
-        end,
-        [{s_compile}] = function()
-            local chunk = table.concat({v_buf})
-            {v_buf} = {{}}
-            {v_blob} = ""
-            
-            local func, err = {v_loader}(chunk)
-            chunk = string.rep("0", #chunk) 
-            
-            if type(func) == "function" then
-                if type(setfenv) == "function" then pcall(setfenv, func, {v_env}) end
-                {v_buf}[1] = func
+            for j = 2, 0, -1 do
+                if string.sub(data, i + 3 - j, i + 3 - j) ~= '=' then
+                    table.insert(res, string.char(math.floor(n / (256 ^ j)) % 256))
+                end
+            end
+        end
+        return table.concat(res)
+    end
+
+    -- RC4 Algorithm
+    local function {v_rc4}(data, key)
+        local s = {{}}
+        for i = 0, 255 do s[i] = i end
+        local j = 0
+        for i = 0, 255 do
+            j = (j + s[i] + string.byte(key, (i % #key) + 1)) % 256
+            s[i], s[j] = s[j], s[i]
+        end
+        local res = {{}}
+        local i = 0
+        j = 0
+        for idx = 1, #data do
+            i = (i + 1) % 256
+            j = (j + s[i]) % 256
+            s[i], s[j] = s[j], s[i]
+            table.insert(res, string.char(bit32 and bit32.bxor(string.byte(data, idx, idx), s[(s[i] + s[j]) % 256]) or (function(a,b) local r,p=0,1 while a>0 or b>0 do if a%2~=b%2 then r=r+p end a,b,p=math.floor(a/2),math.floor(b/2),p*2 end return r end)(string.byte(data, idx, idx), s[(s[i] + s[j]) % 256])))
+        end
+        return table.concat(res)
+    end
+
+    -- Control Flow Flattened Dispatcher
+    while {v_state} ~= 0 do
+        if {v_state} == {s_init} then
+            {v_state} = {s_decode}
+        elseif {v_state} == {s_decode} then
+            _res = {v_decode}({v_blob}, {v_alphabet})
+            {v_blob} = nil -- Clear memory
+            {v_state} = {s_rc4}
+        elseif {v_state} == {s_rc4} then
+            _res = {v_rc4}(_res, _k)
+            _k = nil -- Clear memory
+            {v_state} = {s_compile}
+        elseif {v_state} == {s_compile} then
+            local f, err = {v_loader}(_res)
+            _res = nil -- Clear memory
+            if f then 
+                _func = f 
                 {v_state} = {s_exec}
-            else
-                warn("[Classicfuscator Compile Error] " .. tostring(err))
-                {v_state} = 0
+            else 
+                {v_state} = 0 
             end
-        end,
-        [{s_exec}] = function()
-            local f = {v_buf}[1]
-            {v_buf}[1] = nil
-            
-            if type(coroutine) == "table" and type(coroutine.create) == "function" then
-                local ok, err = coroutine.resume(coroutine.create(f))
-                if not ok then warn(err) end
-            else
-                local ok, err = pcall(f)
-                if not ok then warn(err) end
-            end
-            
+        elseif {v_state} == {s_exec} then
+            pcall(_func)
             {v_state} = 0
         end
-    }}
-
-    while {v_state} ~= 0 do
-        local handler = {v_dispatch}[{v_state}]
-        if handler then handler() else break end
     end
 end
-
-return pcall(__ENTERPRISE_INIT)
+pcall(__START)
 """
-    b64_final = base64.b64encode(vm_lua.strip().encode('utf-8')).decode('utf-8')
-    wrapper = f"""
--- Classicfuscator Enterprise Load Pipeline (Mobile Safe)
-local Ls = nil
-if type(getgenv) == "function" then
-    local env = getgenv()
-    if type(env) == "table" and type(env.loadstring) == "function" then Ls = env.loadstring end
-end
-if not Ls and type(loadstring) == "function" then Ls = loadstring end
-if not Ls and type(load) == "function" then Ls = load end
-if type(Ls) ~= "function" then return warn("[Classicfuscator] Executor does not support loadstring") end
-
--- Pure Math Base64 Decoder (Bypasses broken string.gsub on Mobile)
-local function dec_b64(data)
-    local b = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/'
-    data = string.gsub(data, '[^'..b..'=]', '')
-    local res = {{}}
-    for i = 1, #data, 4 do
-        local n = 0
-        for j = 0, 3 do
-            local c = string.sub(data, i+j, i+j)
-            if c ~= '=' then
-                local p = string.find(b, c)
-                if p then n = n + (p - 1) * (64 ^ (3 - j)) end
-            end
-        end
-        for j = 2, 0, -1 do
-            if string.sub(data, i + 3 - j, i + 3 - j) ~= '=' then
-                table.insert(res, string.char(math.floor(n / (256 ^ j)) % 256))
-            end
-        end
-    end
-    return table.concat(res)
-end
-
-local encoded_payload = "{b64_final}"
-local decoded_payload = dec_b64(encoded_payload)
-encoded_payload = "" -- Memory clean
-
-local f, err = Ls(decoded_payload)
-decoded_payload = "" -- Memory clean
-
-if type(f) == "function" then
-    return f()
-else
-    warn("[Classicfuscator Error] " .. tostring(err))
-end
-"""
-    return wrapper.strip()
+    return vm_lua.strip()
 
 # ==============================================================================
-# 2. LIGHT THEME DASHBOARD UI (ORIGINAL)
+# 4. LIGHT THEME DASHBOARD UI (UNCHANGED)
 # ==============================================================================
 
 HTML_TEMPLATE = """<!DOCTYPE html>
@@ -320,11 +470,11 @@ HTML_TEMPLATE = """<!DOCTYPE html>
 </head>
 <body>
     <div class="card">
-        <h1>Classicfuscator</h1>
+        <h1>Classicfuscator V2</h1>
 
         <div class="tab-nav">
-            <button class="tab-btn active" onclick="switchTab('obfuscatorTab', this)">Category 1: Obfuscator</button>
-            <button class="tab-btn" onclick="switchTab('settingsTab', this)">Category 2: Settings</button>
+            <button class="tab-btn active" onclick="switchTab('obfuscatorTab', this)">Obfuscator</button>
+            <button class="tab-btn" onclick="switchTab('settingsTab', this)">Settings</button>
         </div>
 
         <div id="obfuscatorTab" class="tab-content active">
@@ -351,16 +501,16 @@ HTML_TEMPLATE = """<!DOCTYPE html>
         <div id="settingsTab" class="tab-content">
             <div class="setting-group">
                 <div>
-                    <div class="setting-title">Polymorphic VM Structure</div>
-                    <div class="setting-desc">Automatically enabled in Enterprise build.</div>
+                    <div class="setting-title">Encrypted Payload & Custom BaseN</div>
+                    <div class="setting-desc">Automatically enabled as an additional encoding layer.</div>
                 </div>
                 <label class="switch"><input type="checkbox" checked disabled><span class="slider"></span></label>
             </div>
 
             <div class="setting-group">
                 <div>
-                    <div class="setting-title">Anti-Hook & Sentinel Matrix</div>
-                    <div class="setting-desc">Safely checks environment to prevent dumping.</div>
+                    <div class="setting-title">Runtime Integrity Checks</div>
+                    <div class="setting-desc">Adds a lightweight runtime integrity check.</div>
                 </div>
                 <label class="switch"><input type="checkbox" id="cfgAntiHook" checked><span class="slider"></span></label>
             </div>
@@ -451,12 +601,43 @@ PROTECTED_HTML_TEMPLATE = """<!DOCTYPE html>
 </head>
 <body>
     <div class="card">
-        <h1>Protected By Classicfuscator</h1>
+        <h1>Protected By Classicfuscator V2</h1>
         <p>Cannot be shown publicly.</p>
     </div>
 </body>
 </html>
 """
+
+def _client_ip():
+    # ProxyFix is already configured above; request.remote_addr is the normalized value.
+    return request.remote_addr or "unknown"
+
+
+def _rate_limit_ok(ip):
+    now = time.time()
+    cutoff = now - RATE_WINDOW
+    with RATE_LOCK:
+        q = RATE_STATE[ip]
+        while q and q[0] < cutoff:
+            q.popleft()
+        if len(q) >= RATE_LIMIT:
+            return False
+        q.append(now)
+        return True
+
+
+def _validate_source(raw_code):
+    if not isinstance(raw_code, str):
+        return None, "Source must be text."
+
+    raw_bytes = raw_code.encode("utf-8", errors="strict")
+    if not raw_bytes.strip():
+        return None, "Empty input."
+    if len(raw_bytes) > MAX_SOURCE_BYTES:
+        return None, f"Source exceeds the {MAX_SOURCE_BYTES // 1024} KiB limit."
+
+    return raw_code, None
+
 
 @app.route("/", methods=["GET"])
 def index():
@@ -464,45 +645,114 @@ def index():
 
 @app.route("/obfuscate", methods=["POST"])
 def process():
+    if not _rate_limit_ok(_client_ip()):
+        return jsonify({
+            "success": False,
+            "error": "Rate limit exceeded. Try again later."
+        }), 429
+
+    if not request.is_json:
+        return jsonify({
+            "success": False,
+            "error": "Content-Type must be application/json."
+        }), 415
+
     data = request.get_json(silent=True) or {}
-    raw_code = data.get("code", "")
+    raw_code, validation_error = _validate_source(data.get("code", ""))
+    if validation_error:
+        return jsonify({"success": False, "error": validation_error}), 400
+
     settings = data.get("settings", {})
-    
-    if not raw_code.strip():
-        return jsonify({"success": False, "error": "Empty input"}), 400
-    
-    token = uuid.uuid4().hex
+    if not isinstance(settings, dict):
+        settings = {}
+
+    token = secrets.token_urlsafe(24)
+    created_at = time.time()
+
     try:
         obfuscated_code = build_enterprise_vm(raw_code, settings)
-    except Exception as e:
-        return jsonify({"success": False, "error": str(e)}), 500
-    
-    SCRIPT_CACHE[token] = {"code": obfuscated_code, "created_at": time.time()}
-    with open(os.path.join(SAVED_DIR, f"{token}.lua"), "w") as f:
-        f.write(obfuscated_code)
+    except Exception:
+        app.logger.exception("Compilation failed")
+        return jsonify({
+            "success": False,
+            "error": "Compilation failed."
+        }), 500
 
-    domain = CUSTOM_DOMAIN or request.host_url.rstrip("/")
+    file_path = os.path.join(SAVED_DIR, f"{token}.lua")
+
+    try:
+        with CACHE_LOCK:
+            SCRIPT_CACHE[token] = {
+                "code": obfuscated_code,
+                "created_at": created_at,
+            }
+
+        # Explicit UTF-8 and restricted permissions where supported.
+        with open(file_path, "w", encoding="utf-8", newline="\n") as f:
+            f.write(obfuscated_code)
+
+        try:
+            os.chmod(file_path, 0o600)
+        except OSError:
+            pass
+
+    except OSError:
+        with CACHE_LOCK:
+            SCRIPT_CACHE.pop(token, None)
+        return jsonify({
+            "success": False,
+            "error": "Could not store generated script."
+        }), 500
+
+    domain = CUSTOM_DOMAIN.rstrip("/") if CUSTOM_DOMAIN else request.host_url.rstrip("/")
     loader = f'loadstring(game:HttpGet("{domain}/raw/{token}"))()'
 
-    return jsonify({"success": True, "loader": loader})
+    return jsonify({
+        "success": True,
+        "loader": loader,
+        "expires_in": SCRIPT_TTL,
+    })
+
 
 @app.route("/raw/<token>", methods=["GET"])
 def serve_script(token):
+    # tokens generated by secrets.token_urlsafe() are URL-safe.
+    if not re.fullmatch(r"[A-Za-z0-9_-]{16,64}", token):
+        return Response("Token Expired or Not Found.", status=404, mimetype="text/plain")
+
     if request.headers.get("Sec-Fetch-Dest", "") == "document":
         return render_template_string(PROTECTED_HTML_TEMPLATE)
 
-    code = SCRIPT_CACHE.get(token, {}).get("code")
-    if not code:
+    with CACHE_LOCK:
+        entry = SCRIPT_CACHE.get(token)
+
+    code = entry.get("code") if entry else None
+
+    if code is None:
         file_path = os.path.join(SAVED_DIR, f"{token}.lua")
-        if os.path.exists(file_path):
-            with open(file_path, "r") as f: code = f.read()
+        try:
+            with open(file_path, "r", encoding="utf-8") as f:
+                code = f.read()
+        except (OSError, UnicodeError):
+            code = None
 
     if code:
         res = Response(code, mimetype="text/plain")
-        res.headers["Cache-Control"] = "no-store, max-age=0"
+        res.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+        res.headers["Pragma"] = "no-cache"
+        res.headers["X-Content-Type-Options"] = "nosniff"
         return res
 
-    return Response("warn('[Classicfuscator] Token Expired.')", status=200, mimetype="text/plain")
+    return Response(
+        "warn('[Classicfuscator] Token Expired or Not Found.')",
+        status=404,
+        mimetype="text/plain",
+    )
+
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
+    app.run(
+        host="0.0.0.0",
+        port=int(os.environ.get("PORT", 5000)),
+        threaded=True,
+    )
