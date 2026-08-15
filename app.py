@@ -70,7 +70,7 @@ TOKEN_SPEC = [
     ("NUMBER_HEX", r"0[xX][0-9a-fA-F]+"),
     ("NUMBER_DEC", r"\b\d+\.?\d*(?:[eE][+-]?\d+)?\b"),
     ("IDENTIFIER", r"[a-zA-Z_][a-zA-Z0-9_]*"),
-    ("SYMBOL", r"\.\.\.|\.\.|==|~=|<=|>=|::|[-+*/%^#=<>(){}\[\];:,.]"),
+    ("SYMBOL", r"\+\=|-\=|\*\=|/\=|%\=|\^\=|\.\.\=|\.\.\.|\.\.|==|~=|<=|>=|::|//|<<|>>|[-+*/%^#=<>(){}\[\];:,.\&|~]"),
     ("WHITESPACE", r"\s+"),
 ]
 TOKEN_REGEX = re.compile("|".join(f"(?P<{name}>{pattern})" for name, pattern in TOKEN_SPEC))
@@ -103,18 +103,21 @@ def validate_lua_syntax(lua_code: str) -> tuple[bool, str]:
         if unparsed:
             return False, f"Unclosed literal or token near '{unparsed}'"
 
-    for kind, val in tokens:
-        if val in ("(", "[", "{"):
-            bracket_stack.append(val)
-        elif val in (")", "]", "}"):
-            if not bracket_stack:
-                return False, f"Unmatched closing bracket '{val}'"
-            last_b = bracket_stack.pop()
-            expected = {")": "(", "]": "[", "}": "{"}[val]
-            if last_b != expected:
-                return False, f"Mismatched bracket: expected closing for '{last_b}', got '{val}'"
+    for idx, (kind, val) in enumerate(tokens):
+        prev_val = tokens[idx - 1][1] if idx > 0 else ""
 
-        if kind == "IDENTIFIER":
+        if kind == "SYMBOL":
+            if val in ("(", "[", "{"):
+                bracket_stack.append(val)
+            elif val in (")", "]", "}"):
+                if not bracket_stack:
+                    return False, f"Unmatched closing bracket '{val}'"
+                last_b = bracket_stack.pop()
+                expected = {")": "(", "]": "[", "}": "{"}[val]
+                if last_b != expected:
+                    return False, f"Mismatched bracket: expected closing for '{last_b}', got '{val}'"
+
+        if kind == "IDENTIFIER" and prev_val not in (".", ":"):
             if val == "function":
                 block_stack.append("function")
             elif val == "do":
@@ -150,6 +153,54 @@ def validate_lua_syntax(lua_code: str) -> tuple[bool, str]:
 # 2. CONFIGURABLE AST TRANSFORMER
 # ==============================================================================
 
+def decode_lua_string_bytes(str_val: str) -> bytes:
+    """Safely decodes Lua string literal escape sequences into raw bytes."""
+    if (str_val.startswith('"') and str_val.endswith('"')) or (str_val.startswith("'") and str_val.endswith("'")):
+        inner = str_val[1:-1]
+    elif str_val.startswith("["):
+        inner = re.sub(r"^\[=*\[|\]=*\]$", "", str_val)
+        return inner.encode("utf-8")
+    else:
+        return str_val.encode("utf-8")
+
+    out = bytearray()
+    i = 0
+    n = len(inner)
+    while i < n:
+        ch = inner[i]
+        if ch == '\\' and i + 1 < n:
+            nxt = inner[i + 1]
+            if nxt == 'n': out.append(10); i += 2
+            elif nxt == 'r': out.append(13); i += 2
+            elif nxt == 't': out.append(9); i += 2
+            elif nxt == '\\': out.append(92); i += 2
+            elif nxt == '"': out.append(34); i += 2
+            elif nxt == "'": out.append(39); i += 2
+            elif nxt == 'a': out.append(7); i += 2
+            elif nxt == 'b': out.append(8); i += 2
+            elif nxt == 'v': out.append(11); i += 2
+            elif nxt == 'f': out.append(12); i += 2
+            elif nxt == 'x' and i + 3 < n:
+                try:
+                    out.append(int(inner[i+2:i+4], 16))
+                    i += 4
+                except ValueError:
+                    out.append(ord(ch)); i += 1
+            elif nxt.isdigit():
+                j = i + 1
+                while j < min(i + 4, n) and inner[j].isdigit():
+                    j += 1
+                out.append(int(inner[i+1:j]) % 256)
+                i = j
+            else:
+                out.append(ord(nxt))
+                i += 2
+        else:
+            out.extend(ch.encode("utf-8"))
+            i += 1
+    return bytes(out)
+
+
 def transform_number(num_str: str) -> str:
     try:
         if num_str.lower().startswith("0x"):
@@ -183,18 +234,7 @@ def transform_number(num_str: str) -> str:
 
 
 def transform_string(str_val: str, dec_func_name: str) -> str:
-    if (str_val.startswith('"') and str_val.endswith('"')) or (str_val.startswith("'") and str_val.endswith("'")):
-        inner = str_val[1:-1]
-        try:
-            inner = bytes(inner, "utf-8").decode("unicode_escape")
-        except Exception:
-            pass
-    elif str_val.startswith("["):
-        inner = re.sub(r"^\[=*\[|\]=*\]$", "", str_val)
-    else:
-        inner = str_val
-
-    raw_bytes = list(inner.encode("utf-8"))
+    raw_bytes = list(decode_lua_string_bytes(str_val))
     key = random.randint(1, 255)
     mask = random.randint(1, 255)
     
@@ -228,6 +268,20 @@ def ast_obfuscate(lua_code: str, dec_func_name: str, settings: dict) -> str:
 
     output = []
     for i, (kind, val) in enumerate(tokens):
+        prev_non_ws = None
+        for k in range(i - 1, -1, -1):
+            if tokens[k][0] != "WHITESPACE":
+                prev_non_ws = tokens[k]
+                break
+
+        next_non_ws = None
+        for k in range(i + 1, len(tokens)):
+            if tokens[k][0] != "WHITESPACE":
+                next_non_ws = tokens[k]
+                break
+
+        is_property_or_field = prev_non_ws and prev_non_ws[1] in (".", ":")
+
         if kind in ("COMMENT_LONG", "COMMENT_SHORT"):
             output.append(" ")
         elif kind in ("STRING_LONG", "STRING_SQ", "STRING_DQ"):
@@ -241,21 +295,17 @@ def ast_obfuscate(lua_code: str, dec_func_name: str, settings: dict) -> str:
             else:
                 output.append(val)
         elif kind == "IDENTIFIER":
-            if settings.get("number_mut", True) and val == "true":
+            if settings.get("number_mut", True) and val == "true" and not is_property_or_field:
                 k1 = random.randint(10, 99)
                 output.append(f"({k1} == {k1})")
-            elif settings.get("number_mut", True) and val == "false":
+            elif settings.get("number_mut", True) and val == "false" and not is_property_or_field:
                 k1 = random.randint(10, 99)
                 output.append(f"({k1} == {k1 + 1})")
-            elif settings.get("number_mut", True) and val == "nil":
+            elif settings.get("number_mut", True) and val == "nil" and not is_property_or_field:
                 output.append("({[0]=nil}[1])")
             elif val in renamed_map:
-                prev_non_ws = None
-                for k in range(i - 1, -1, -1):
-                    if tokens[k][0] != "WHITESPACE":
-                        prev_non_ws = tokens[k]
-                        break
-                if prev_non_ws and prev_non_ws[1] in (".", ":"):
+                is_table_key = next_non_ws and next_non_ws[1] == "="
+                if is_property_or_field or is_table_key:
                     output.append(val)
                 else:
                     output.append(renamed_map[val])
@@ -306,7 +356,6 @@ def build_vm_layer(payload_code: str, dec_func_name: str, settings: dict, is_out
     trans_lua = "{" + ",".join(f"[{s}]={c[1]}" for s, c in state_map.items()) + "}"
     start_state = chunk_states[0] if chunk_states else 0
 
-    v_env = random_id("Env")
     v_loader = random_id("Ld")
     v_char = random_id("Chr")
     v_concat = random_id("Cat")
@@ -511,7 +560,6 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             letter-spacing: -0.3px;
         }
         
-        /* Category Navigation Tabs */
         .tab-nav {
             display: flex;
             gap: 8px;
@@ -636,7 +684,6 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             resize: none;
         }
 
-        /* Settings Tab UI */
         .setting-group {
             margin-bottom: 18px;
             background: #f8fafc;
@@ -669,7 +716,6 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             color: #1e293b;
         }
         
-        /* Switch Toggle */
         .switch {
             position: relative;
             display: inline-block;
@@ -697,13 +743,11 @@ HTML_TEMPLATE = """<!DOCTYPE html>
     <div class="card">
         <h1>Classicfuscator</h1>
 
-        <!-- Category Navigation Tabs -->
         <div class="tab-nav">
             <button class="tab-btn active" onclick="switchTab('obfuscatorTab', this)">Category 1: Obfuscator</button>
             <button class="tab-btn" onclick="switchTab('settingsTab', this)">Category 2: Settings</button>
         </div>
 
-        <!-- CATEGORY 1: OBFUSCATOR -->
         <div id="obfuscatorTab" class="tab-content active">
             <div class="file-upload-box" id="dropZone" onclick="document.getElementById('luaFileInput').click()">
                 <span class="file-upload-title">Upload a Lua File:</span>
@@ -725,7 +769,6 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             </div>
         </div>
 
-        <!-- CATEGORY 2: SETTINGS -->
         <div id="settingsTab" class="tab-content">
             <div class="setting-group">
                 <div class="setting-header">
