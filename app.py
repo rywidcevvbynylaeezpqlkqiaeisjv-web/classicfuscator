@@ -88,15 +88,18 @@ def obfuscate_lua(code: str, token: str) -> str:
     v_bxor = random_id("Bx")
     v_rol = random_id("Rl")
     v_opcodes = random_id("Ops")
-    v_state = random_id("St")
-    v_chk_hook = random_id("ChkH")
+    v_seed = random_id("Sd")
+    v_shift = random_id("Sh")
+    v_mask = random_id("Mk")
+    v_guard = random_id("Grd")
+    v_clean = random_id("Cln")
     v_res = random_id("Res")
     v_err = random_id("Err")
     v_token = random_id("Tk")
     v_http = random_id("Http")
 
-    # 4. Hardened Bytecode Opcode VM Stub with Anti-Hooking & Server Handshake
-    lua_stub = f"""--[[ Classicfuscator v6 Bytecode VM ]]--
+    # 4. Hardened Bytecode Opcode VM Stub with Isolated Self-Destructing Anti-Hook Guard
+    lua_stub = f"""--[[ Classicfuscator v6.5 Hardened VM ]]--
 return (function(...)
     local {v_env} = (getgenv and getgenv()) or _ENV or _G
     local {v_loader} = {v_env}.loadstring or load
@@ -108,23 +111,50 @@ return (function(...)
     local {v_char} = string.char
     local {v_concat} = table.concat
 
-    -- Anti-Hooking Protection (Runs ONLY during VM startup)
-    local function {v_chk_hook}(fn)
-        if not fn then return false end
-        if isfunctionhooked and isfunctionhooked(fn) then return true end
-        if islclosure and islclosure(fn) then return true end
-        if debug and debug.info then
-            local s = debug.info(fn, "s")
-            if s and s ~= "[C]" and s ~= "=[C]" then return true end
-        end
-        return false
-    end
+    -- Self-Destructing Multi-Vector Anti-Hook Guard
+    -- Runs ONCE at startup to verify VM environment, then purges itself completely
+    local {v_clean} = (function()
+        local _pcall = pcall
+        local _type = type
+        local _getfenv = getfenv
+        local _debug_info = (debug and debug.info)
+        local _islclosure = islclosure
+        local _isfunctionhooked = isfunctionhooked
 
-    -- Verify environment integrity for VM loader
-    if {v_chk_hook}({v_loader}) then
-        return (function() end)()
+        -- Vector 1: Executor Hook Detection API
+        if _isfunctionhooked and _isfunctionhooked({v_loader}) then return false end
+
+        -- Vector 2: Closure Type Check (Native loaders MUST be C-closures)
+        if _islclosure and _islclosure({v_loader}) then return false end
+
+        -- Vector 3: Debug Info Inspection
+        if _debug_info then
+            local src = _debug_info({v_loader}, "s")
+            if src and src ~= "[C]" and src ~= "=[C]" then return false end
+        end
+
+        -- Vector 4: Stack Environment Leaks (Detects active detour frames)
+        if _getfenv and _pcall then
+            local local_env = _getfenv(1)
+            for lvl = 0, 15 do
+                local ok, env = _pcall(_getfenv, lvl)
+                if ok and env and env ~= local_env then
+                    for k in pairs(env) do
+                        if k == "hookfunction" or k == "hookmetamethod" or k == "replaceclosure" then
+                            return false
+                        end
+                    end
+                end
+            end
+        end
+
+        return true
+    end)()
+
+    if not {v_clean} then
+        return (function() end)() -- Quietly trap execution if hooked
     end
-    {v_chk_hook} = nil -- Immediately destroy anti-hook function so obfuscated loadstrings work freely
+    {v_clean} = nil -- Completely purge guard logic so user scripts & UI libraries run freely
 
     -- Safe Bitwise XOR Engine
     local function {v_bxor}(a, b)
@@ -152,14 +182,6 @@ return (function(...)
     local {v_mask} = {k_mask}
     local {v_opcodes} = {opcodes_lua}
     local {v_token} = "{token}"
-
-    -- Optional Backend Verification Handshake
-    if game and game.HttpGet then
-        pcall(function()
-            local {v_http} = game:GetService("HttpService")
-            -- Verify session active state
-        end)
-    end
 
     -- Opcode Execution Pipeline
     local function execute_opcodes(...)
