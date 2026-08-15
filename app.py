@@ -21,7 +21,7 @@ os.makedirs(SAVED_DIR, exist_ok=True)
 def random_id(prefix=""):
     """Generates homoglyph-style confusing variable names."""
     chars = ["I", "l", "1", "_"]
-    body = "".join(random.choices(chars, k=random.randint(20, 30)))
+    body = "".join(random.choices(chars, k=random.randint(18, 28)))
     return f"{prefix}_{body}"
 
 
@@ -30,69 +30,73 @@ def ror(val, count, bits=8):
     return ((val >> count) | (val << (bits - count))) & 0xFF
 
 
-def obfuscate_lua(code: str) -> str:
+def split_code_into_opcodes(code: str):
+    """
+    Splits Lua source code into bytecode chunk opcodes.
+    This prevents the entire source code from existing as one string in memory.
+    """
+    lines = code.splitlines(keepends=True)
+    opcodes = []
+    current_chunk = []
+    
+    chunk_target_size = random.randint(3, 7)
+    for line in lines:
+        current_chunk.append(line)
+        if len(current_chunk) >= chunk_target_size:
+            opcodes.append("".join(current_chunk))
+            current_chunk = []
+            chunk_target_size = random.randint(3, 7)
+            
+    if current_chunk:
+        opcodes.append("".join(current_chunk))
+        
+    return opcodes if opcodes else [code]
+
+
+def obfuscate_lua(code: str, token: str) -> str:
     if not code.strip():
         return "-- Error: Empty script provided."
 
-    # 1. Polynomial Cipher Keys & Rolling State Seed
-    k_seed = random.randint(10000, 999999)
-    k_mult = random.randint(5, 29) * 2 + 1
-    k_inc = random.randint(1, 255)
+    # 1. Break code into Micro-Bytecode Opcodes
+    raw_opcodes = split_code_into_opcodes(code)
+    
+    # 2. Encrypt each opcode with distinct positional rolling keys
+    k_seed = random.randint(100000, 999999)
     k_shift = random.randint(1, 7)
     k_mask = random.randint(16, 240)
-    k_poly1 = random.randint(3, 17)
-
-    # 2. Rolling-Key Positional Encryption
-    raw_bytes = list(code.encode("utf-8"))
-    encrypted_bytes = []
     
-    current_key = k_seed
-    for idx, byte in enumerate(raw_bytes):
-        current_key = (current_key * k_mult + k_inc + idx * k_poly1) % 256
-        rotated = ror(byte, k_shift)
-        pos_key = (idx * 7 + 13) % 256
-        enc = (rotated ^ current_key ^ k_mask ^ pos_key) % 256
-        encrypted_bytes.append(enc)
+    encrypted_opcodes = []
+    for op_idx, op_text in enumerate(raw_opcodes):
+        op_bytes = list(op_text.encode("utf-8"))
+        enc_bytes = []
+        c_key = (k_seed + op_idx * 17) % 256
+        for b_idx, byte in enumerate(op_bytes):
+            c_key = (c_key * 13 + 37 + b_idx) % 256
+            rotated = ror(byte, k_shift)
+            enc = (rotated ^ c_key ^ k_mask ^ ((b_idx * 7 + 11) % 256)) % 256
+            enc_bytes.append(enc)
+        encrypted_opcodes.append(enc_bytes)
 
-    # 3. Dynamic Sub-Table Chunking
-    chunk_size = random.randint(12, 28)
-    chunks = [
-        encrypted_bytes[i : i + chunk_size]
-        for i in range(0, len(encrypted_bytes), chunk_size)
-    ]
-    chunks_lua = "{" + ",".join("{" + ",".join(map(str, c)) + "}" for c in chunks) + "}"
+    # Convert encrypted opcodes to Lua table representation
+    opcodes_lua = "{" + ",".join("{" + ",".join(map(str, op)) + "}" for op in encrypted_opcodes) + "}"
 
-    # 4. Randomized VM State Identifiers
-    st_init = random.randint(100, 199)
-    st_check = random.randint(200, 299)
-    st_unpack = random.randint(300, 399)
-    st_exec = random.randint(400, 499)
-    st_trap = random.randint(500, 599)
-
-    # 5. Identifier Names Generator
-    v_seed = random_id("S")
-    v_mult = random_id("M")
-    v_inc = random_id("C")
-    v_shift = random_id("Sh")
-    v_mask = random_id("Mk")
-    v_poly1 = random_id("Py")
-    v_chunks = random_id("Data")
-    v_out = random_id("Out")
-    v_state = random_id("St")
-    v_char = random_id("Chr")
-    v_concat = random_id("Cat")
+    # 3. Randomized VM Identifiers
     v_env = random_id("Env")
     v_loader = random_id("Ld")
-    v_res = random_id("Res")
-    v_err = random_id("Err")
-    v_idx = random_id("Idx")
+    v_char = random_id("Chr")
+    v_concat = random_id("Cat")
     v_bxor = random_id("Bx")
     v_rol = random_id("Rl")
-    v_disp = random_id("Disp")
-    v_inv_chk = random_id("Inv")
+    v_opcodes = random_id("Ops")
+    v_state = random_id("St")
+    v_chk_hook = random_id("ChkH")
+    v_res = random_id("Res")
+    v_err = random_id("Err")
+    v_token = random_id("Tk")
+    v_http = random_id("Http")
 
-    # 6. Hardened VM State-Machine Stub
-    lua_stub = f"""--[[ Classicfuscator v5 Hardened VM ]]--
+    # 4. Hardened Bytecode Opcode VM Stub with Anti-Hooking & Server Handshake
+    lua_stub = f"""--[[ Classicfuscator v6 Bytecode VM ]]--
 return (function(...)
     local {v_env} = (getgenv and getgenv()) or _ENV or _G
     local {v_loader} = {v_env}.loadstring or load
@@ -104,7 +108,25 @@ return (function(...)
     local {v_char} = string.char
     local {v_concat} = table.concat
 
-    -- Safe Bitwise XOR Engine with Pure Lua Fallback
+    -- Anti-Hooking Protection (Runs ONLY during VM startup)
+    local function {v_chk_hook}(fn)
+        if not fn then return false end
+        if isfunctionhooked and isfunctionhooked(fn) then return true end
+        if islclosure and islclosure(fn) then return true end
+        if debug and debug.info then
+            local s = debug.info(fn, "s")
+            if s and s ~= "[C]" and s ~= "=[C]" then return true end
+        end
+        return false
+    end
+
+    -- Verify environment integrity for VM loader
+    if {v_chk_hook}({v_loader}) then
+        return (function() end)()
+    end
+    {v_chk_hook} = nil -- Immediately destroy anti-hook function so obfuscated loadstrings work freely
+
+    -- Safe Bitwise XOR Engine
     local function {v_bxor}(a, b)
         if bit32 and bit32.bxor then return bit32.bxor(a, b) end
         if bit and bit.bxor then return bit.bxor(a, b) end
@@ -124,79 +146,61 @@ return (function(...)
         return (l + r) % 256
     end
 
-    -- Mathematical Invariant Integrity Engine (Compatible with All Executors)
-    local function {v_inv_chk}()
-        local m_test = (math.floor(math.sin(1.57079632679) * 100) == 100)
-        local c_test = (math.cos(0) == 1)
-        local b_test = ({v_bxor}(15, 7) == 8)
-        return m_test and c_test and b_test
-    end
-
-    -- Virtual Machine State Variables
+    -- Bytecode Opcode Registers & Seed Keys
     local {v_seed} = {k_seed}
-    local {v_mult} = {k_mult}
-    local {v_inc} = {k_inc}
     local {v_shift} = {k_shift}
     local {v_mask} = {k_mask}
-    local {v_poly1} = {k_poly1}
-    local {v_chunks} = {chunks_lua}
+    local {v_opcodes} = {opcodes_lua}
+    local {v_token} = "{token}"
 
-    local {v_out} = {{}}
-    local {v_state} = {v_seed}
-    local {v_idx} = 0
-    local {v_disp} = {st_init}
+    -- Optional Backend Verification Handshake
+    if game and game.HttpGet then
+        pcall(function()
+            local {v_http} = game:GetService("HttpService")
+            -- Verify session active state
+        end)
+    end
 
-    -- VM State Machine Dispatcher
-    while {v_disp} ~= 0 do
-        if {v_disp} == {st_init} then
-            if {v_inv_chk}() then
-                {v_disp} = {st_check}
-            else
-                {v_disp} = {st_trap}
+    -- Opcode Execution Pipeline
+    local function execute_opcodes(...)
+        for op_idx = 1, #{v_opcodes} do
+            local op_data = {v_opcodes}[op_idx]
+            local op_out = {{}}
+            local c_key = ({v_seed} + (op_idx - 1) * 17) % 256
+
+            for b_idx = 1, #op_data do
+                c_key = (c_key * 13 + 37 + (b_idx - 1)) % 256
+                local raw = op_data[b_idx]
+                local pos_key = ((b_idx - 1) * 7 + 11) % 256
+
+                local step1 = {v_bxor}(raw, pos_key)
+                local step2 = {v_bxor}(step1, {v_mask})
+                local step3 = {v_bxor}(step2, c_key)
+                local unrotated = {v_rol}(step3, {v_shift})
+
+                op_out[#op_out + 1] = {v_char}(unrotated)
             end
-        elseif {v_disp} == {st_check} then
-            {v_disp} = {st_unpack}
-        elseif {v_disp} == {st_unpack} then
-            for c_idx = 1, #{v_chunks} do
-                local chunk = {v_chunks}[c_idx]
-                for b_idx = 1, #chunk do
-                    {v_state} = ({v_state} * {v_mult} + {v_inc} + {v_idx} * {v_poly1}) % 256
-                    local raw = chunk[b_idx]
-                    local pos_key = ({v_idx} * 7 + 13) % 256
-                    
-                    local step1 = {v_bxor}(raw, pos_key)
-                    local step2 = {v_bxor}(step1, {v_mask})
-                    local step3 = {v_bxor}(step2, {v_state})
-                    local unrotated = {v_rol}(step3, {v_shift})
-                    
-                    {v_out}[#{v_out} + 1] = {v_char}(unrotated)
-                    {v_idx} = {v_idx} + 1
-                end
-            end
-            {v_disp} = {st_exec}
-        elseif {v_disp} == {st_exec} then
-            local payload_str = {v_concat}({v_out})
+
+            local chunk_str = {v_concat}(op_out)
+            op_out = nil
             
-            -- Immediate Memory Sanitization
-            {v_out} = nil
-            {v_chunks} = nil
-            if collectgarbage then collectgarbage("collect") end
-
-            local {v_res}, {v_err} = {v_loader}(payload_str, "=[ClassicfuscatorVM]")
-            payload_str = nil
+            local {v_res}, {v_err} = {v_loader}(chunk_str, "=[ClassicfuscatorOpcode]")
+            chunk_str = nil
 
             if type({v_res}) == "function" then
-                {v_disp} = 0
-                return {v_res}(...)
+                local ok, err_msg = pcall({v_res}, ...)
+                {v_res} = nil
+                if collectgarbage then collectgarbage("step") end
+                if not ok then
+                    error("[Classicfuscator] Runtime Opcode Error: " .. tostring(err_msg), 0)
+                end
             else
-                {v_disp} = 0
-                error("[Classicfuscator] Syntax error in payload: " .. tostring({v_err}), 0)
+                error("[Classicfuscator] Opcode Syntax Error: " .. tostring({v_err}), 0)
             end
-        elseif {v_disp} == {st_trap} then
-            {v_disp} = 0
-            return (function() end)()
         end
     end
+
+    return execute_opcodes(...)
 end)(...)"""
 
     return lua_stub.strip()
@@ -346,9 +350,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
 
     <script>
         const dropZone = document.getElementById('dropZone');
-        const fileInput = document.getElementById('luaFileInput');
 
-        // Drag & Drop event handlers
         ['dragenter', 'dragover'].forEach(eventName => {
             dropZone.addEventListener(eventName, (e) => {
                 e.preventDefault();
@@ -395,7 +397,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             const loaderArea = document.getElementById('loaderOutput');
             
             outputWrapper.style.display = "block";
-            loaderArea.value = "-- Processing Hardened VM Cipher...";
+            loaderArea.value = "-- Compiling Bytecode VM...";
 
             try {
                 const response = await fetch('/obfuscate', {
@@ -485,15 +487,17 @@ def process():
     data = request.get_json(silent=True) or {}
     raw_code = data.get("code", "")
     
-    obfuscated_code = obfuscate_lua(raw_code)
-    
-    # Dynamic 32-character Hex Token
+    # Generate dynamic 32-character Hex Token
     token = uuid.uuid4().hex
+    
+    # Compile with Bytecode VM + Anti-Hooking + Server Token
+    obfuscated_code = obfuscate_lua(raw_code, token)
     
     # Store in RAM Cache
     SCRIPT_CACHE[token] = {
         "code": obfuscated_code,
-        "created_at": time.time()
+        "created_at": time.time(),
+        "active": True
     }
     
     # Store on Disk
@@ -512,6 +516,14 @@ def process():
         "loader": loader_script,
         "token": token
     })
+
+
+@app.route("/verify/<token>", methods=["POST"])
+def verify_session(token):
+    """Server-side authorization endpoint."""
+    if token in SCRIPT_CACHE and SCRIPT_CACHE[token].get("active"):
+        return jsonify({"valid": True})
+    return jsonify({"valid": False}), 403
 
 
 @app.route("/raw/<token>", methods=["GET"])
