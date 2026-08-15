@@ -12,7 +12,7 @@ from werkzeug.middleware.proxy_fix import ProxyFix
 app = Flask(__name__)
 app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1, x_prefix=1)
 
-# Render Custom Domain Configuration
+# Render Custom Domain Configuration (auto-detects if left blank)
 CUSTOM_DOMAIN = "https://classicfuscator.onrender.com"
 
 # Persistent Storage Paths
@@ -77,13 +77,6 @@ TOKEN_REGEX = re.compile("|".join(f"(?P<{name}>{pattern})" for name, pattern in 
 
 
 def validate_lua_syntax(lua_code: str) -> tuple[bool, str]:
-    """
-    Validates Lua syntax:
-    - Empty or whitespace input
-    - Unclosed strings & long brackets
-    - Unmatched parentheses, square brackets, and curly braces
-    - Mismatched or unclosed block keywords (function, if, do, while, repeat, end, until)
-    """
     if not lua_code or not lua_code.strip():
         return False, "Input code is empty."
 
@@ -97,7 +90,7 @@ def validate_lua_syntax(lua_code: str) -> tuple[bool, str]:
         if start > pos:
             unparsed = lua_code[pos:start].strip()
             if unparsed:
-                return False, f"Unexpected token or unclosed literal near '{unparsed}'"
+                return False, f"Unexpected token near '{unparsed}'"
         pos = end
 
         kind = match.lastgroup
@@ -108,9 +101,8 @@ def validate_lua_syntax(lua_code: str) -> tuple[bool, str]:
     if pos < len(lua_code):
         unparsed = lua_code[pos:].strip()
         if unparsed:
-            return False, f"Unclosed string, comment, or invalid token near '{unparsed}'"
+            return False, f"Unclosed literal or token near '{unparsed}'"
 
-    # Syntax block & bracket verification
     for kind, val in tokens:
         if val in ("(", "[", "{"):
             bracket_stack.append(val)
@@ -133,7 +125,7 @@ def validate_lua_syntax(lua_code: str) -> tuple[bool, str]:
                 block_stack.append("repeat")
             elif val in ("elseif", "else"):
                 if not block_stack or block_stack[-1] != "if":
-                    return False, f"Unexpected '{val}' without matching 'if/then' condition"
+                    return False, f"Unexpected '{val}' without matching 'if/then'"
             elif val == "end":
                 if not block_stack:
                     return False, "Unexpected 'end' with no opening block"
@@ -142,7 +134,7 @@ def validate_lua_syntax(lua_code: str) -> tuple[bool, str]:
                     return False, f"Mismatched 'end' for '{popped}' block"
             elif val == "until":
                 if not block_stack or block_stack[-1] != "repeat":
-                    return False, "Unexpected 'until' with no matching 'repeat' loop"
+                    return False, "Unexpected 'until' with no matching 'repeat'"
                 block_stack.pop()
 
     if bracket_stack:
@@ -155,7 +147,7 @@ def validate_lua_syntax(lua_code: str) -> tuple[bool, str]:
 
 
 # ==============================================================================
-# 2. S-TIER AST MUTATOR & CONSTANT TRANSFORMER
+# 2. CONFIGURABLE AST TRANSFORMER
 # ==============================================================================
 
 def transform_number(num_str: str) -> str:
@@ -215,7 +207,7 @@ def transform_string(str_val: str, dec_func_name: str) -> str:
     return f"{dec_func_name}({bytes_table}, {key}, {mask})"
 
 
-def ast_obfuscate(lua_code: str, dec_func_name: str) -> str:
+def ast_obfuscate(lua_code: str, dec_func_name: str, settings: dict) -> str:
     tokens = []
     for match in TOKEN_REGEX.finditer(lua_code):
         kind = match.lastgroup
@@ -223,32 +215,39 @@ def ast_obfuscate(lua_code: str, dec_func_name: str) -> str:
         tokens.append((kind, val))
 
     renamed_map = {}
-    for i, (kind, val) in enumerate(tokens):
-        if kind == "IDENTIFIER" and val in ("local", "function", "for"):
-            j = i + 1
-            while j < len(tokens) and tokens[j][0] == "WHITESPACE":
-                j += 1
-            if j < len(tokens) and tokens[j][0] == "IDENTIFIER" and tokens[j][1] not in LUA_KEYWORDS:
-                var_name = tokens[j][1]
-                if var_name not in renamed_map and len(var_name) > 1:
-                    renamed_map[var_name] = random_id("v")
+    if settings.get("homoglyphs", True):
+        for i, (kind, val) in enumerate(tokens):
+            if kind == "IDENTIFIER" and val in ("local", "function", "for"):
+                j = i + 1
+                while j < len(tokens) and tokens[j][0] == "WHITESPACE":
+                    j += 1
+                if j < len(tokens) and tokens[j][0] == "IDENTIFIER" and tokens[j][1] not in LUA_KEYWORDS:
+                    var_name = tokens[j][1]
+                    if var_name not in renamed_map and len(var_name) > 1:
+                        renamed_map[var_name] = random_id("v")
 
     output = []
     for i, (kind, val) in enumerate(tokens):
         if kind in ("COMMENT_LONG", "COMMENT_SHORT"):
             output.append(" ")
         elif kind in ("STRING_LONG", "STRING_SQ", "STRING_DQ"):
-            output.append(transform_string(val, dec_func_name))
+            if settings.get("string_enc", True):
+                output.append(transform_string(val, dec_func_name))
+            else:
+                output.append(val)
         elif kind in ("NUMBER_HEX", "NUMBER_DEC"):
-            output.append(transform_number(val))
+            if settings.get("number_mut", True):
+                output.append(transform_number(val))
+            else:
+                output.append(val)
         elif kind == "IDENTIFIER":
-            if val == "true":
+            if settings.get("number_mut", True) and val == "true":
                 k1 = random.randint(10, 99)
                 output.append(f"({k1} == {k1})")
-            elif val == "false":
+            elif settings.get("number_mut", True) and val == "false":
                 k1 = random.randint(10, 99)
                 output.append(f"({k1} == {k1 + 1})")
-            elif val == "nil":
+            elif settings.get("number_mut", True) and val == "nil":
                 output.append("({[0]=nil}[1])")
             elif val in renamed_map:
                 prev_non_ws = None
@@ -271,14 +270,11 @@ def ast_obfuscate(lua_code: str, dec_func_name: str) -> str:
 
 
 # ==============================================================================
-# 3. RUNTIME VM, SENTINEL MATRIX & POISONING ENGINE
+# 3. RECURSIVE MULTI-LAYER VM ENGINE
 # ==============================================================================
 
-def obfuscate_lua(code: str, token: str) -> str:
-    v_dec = random_id("Dec")
-    ast_transformed = ast_obfuscate(code, v_dec)
-
-    raw_bytes = list(ast_transformed.encode("utf-8"))
+def build_vm_layer(payload_code: str, dec_func_name: str, settings: dict, is_outer: bool) -> str:
+    raw_bytes = list(payload_code.encode("utf-8"))
     k_seed = random.randint(100000, 999999)
     k_mult = random.randint(5, 29) * 2 + 1
     k_inc = random.randint(1, 255)
@@ -331,22 +327,19 @@ def obfuscate_lua(code: str, token: str) -> str:
     v_genv = random_id("Genv")
     v_anti = random_id("Anti")
 
-    lua_stub = f"""--[[ Classicfuscator Enterprise Sentinel VM ]]--
-return (function(...)
-    local {v_genv} = (getgenv and getgenv()) or _ENV or _G
-
+    anti_hook_code = ""
+    if settings.get("antihook", True):
+        anti_hook_code = f"""
     local function {v_anti}()
         if debug and (debug.info or debug.getinfo) then
             local get_i = debug.info or debug.getinfo
             local ok, info = pcall(function() return get_i(1, "slna") end)
             if not ok then return false end
         end
-
         local ts = tostring
         if ts(pcall):find("hook") or ts(ts):find("hook") or ts(type):find("hook") or ts(setmetatable):find("hook") then
             return false
         end
-
         if getrawmetatable then
             local mt = getrawmetatable({v_genv})
             if mt and (rawget(mt, "__index") or rawget(mt, "__namecall")) then
@@ -356,7 +349,6 @@ return (function(...)
                 end
             end
         end
-
         return true
     end
 
@@ -366,7 +358,30 @@ return (function(...)
         while true do end
         return
     end
+"""
+    else:
+        anti_hook_code = f"    local {v_seed} = {k_seed}\n"
 
+    string_dec_block = ""
+    if settings.get("string_enc", True) and is_outer:
+        string_dec_block = f"""
+    {v_genv}.{dec_func_name} = function(bytes, k, m)
+        local t = {{}}
+        for i = 1, #bytes do
+            local pos_k = (k + ((i - 1) * 7) + 11) % 256
+            local step1 = {v_bxor}(bytes[i], m)
+            t[i] = {v_char}({v_bxor}(step1, pos_k))
+        end
+        return {v_concat}(t)
+    end
+"""
+
+    watermark = settings.get("watermark", "").strip()
+    watermark_comment = f"--[[ {watermark} ]]\n" if watermark else "--[[ Protected by Classicfuscator Enterprise ]]--\n"
+
+    lua_stub = f"""{watermark_comment}return (function(...)
+    local {v_genv} = (getgenv and getgenv()) or _ENV or _G
+{anti_hook_code}
     local {v_loader} = {v_genv}.loadstring or loadstring or load
     if type({v_loader}) ~= "function" then
         return
@@ -393,17 +408,7 @@ return (function(...)
         local r = math.floor(val / (2 ^ (8 - amt)))
         return (l + r) % 256
     end
-
-    {v_genv}.{v_dec} = function(bytes, k, m)
-        local t = {{}}
-        for i = 1, #bytes do
-            local pos_k = (k + ((i - 1) * 7) + 11) % 256
-            local step1 = {v_bxor}(bytes[i], m)
-            t[i] = {v_char}({v_bxor}(step1, pos_k))
-        end
-        return {v_concat}(t)
-    end
-
+{string_dec_block}
     local {v_mult} = {k_mult}
     local {v_inc} = {k_inc}
     local {v_shift} = {k_shift}
@@ -452,8 +457,23 @@ end)(...)"""
     return lua_stub.strip()
 
 
+def obfuscate_pipeline(raw_code: str, settings: dict) -> str:
+    v_dec = random_id("Dec")
+    
+    # 1. AST Multi-Pass Transformation
+    current_payload = ast_obfuscate(raw_code, v_dec, settings)
+    
+    # 2. Multi-Layer VM Packaging
+    layers = max(1, min(5, int(settings.get("layers", 1))))
+    for layer_idx in range(layers):
+        is_outer = (layer_idx == 0)
+        current_payload = build_vm_layer(current_payload, v_dec, settings, is_outer)
+
+    return current_payload
+
+
 # ==============================================================================
-# 4. LIGHT THEME DASHBOARD & FLASK API
+# 4. LIGHT THEME CATEGORY DASHBOARD & API
 # ==============================================================================
 
 HTML_TEMPLATE = """<!DOCTYPE html>
@@ -461,7 +481,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Classicfuscator</title>
+    <title>Classicfuscator Enterprise</title>
     <style>
         * { box-sizing: border-box; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }
         body { 
@@ -479,7 +499,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             border-radius: 20px; 
             box-shadow: 0 4px 20px rgba(0, 0, 0, 0.03); 
             width: 100%; 
-            max-width: 520px; 
+            max-width: 560px; 
             padding: 36px 32px; 
             border: 1px solid #eef0f4; 
         }
@@ -487,15 +507,46 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             font-size: 28px; 
             font-weight: 700; 
             color: #1a1a1a; 
-            margin: 0 0 24px 0; 
+            margin: 0 0 20px 0; 
             letter-spacing: -0.3px;
         }
+        
+        /* Category Navigation Tabs */
+        .tab-nav {
+            display: flex;
+            gap: 8px;
+            background: #f1f5f9;
+            padding: 4px;
+            border-radius: 12px;
+            margin-bottom: 24px;
+        }
+        .tab-btn {
+            flex: 1;
+            padding: 10px 16px;
+            border: none;
+            background: transparent;
+            color: #64748b;
+            font-size: 14px;
+            font-weight: 600;
+            border-radius: 8px;
+            cursor: pointer;
+            transition: all 0.2s ease;
+        }
+        .tab-btn.active {
+            background: #ffffff;
+            color: #0070f3;
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.06);
+        }
+
+        .tab-content { display: none; }
+        .tab-content.active { display: block; }
+
         .file-upload-box {
             border: 2px dashed #0070f3;
             border-radius: 12px;
-            padding: 24px 20px;
+            padding: 22px 20px;
             background-color: #ffffff;
-            margin-bottom: 20px;
+            margin-bottom: 18px;
             text-align: center;
             cursor: pointer;
             transition: all 0.2s ease;
@@ -505,10 +556,10 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             border-color: #0052cc;
         }
         .file-upload-title {
-            font-size: 16px;
+            font-size: 15px;
             font-weight: 700;
             color: #1a1a1a;
-            margin-bottom: 6px;
+            margin-bottom: 4px;
             display: block;
         }
         .file-upload-subtext {
@@ -517,18 +568,18 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             margin: 0;
         }
         .or-text {
-            font-size: 15px;
-            font-weight: 400;
+            font-size: 14px;
+            font-weight: 500;
             color: #1e293b;
-            margin-bottom: 12px;
+            margin-bottom: 10px;
         }
         textarea { 
             width: 100%; 
-            height: 180px;
+            height: 160px;
             border: 1px solid #dcdfe6; 
             border-radius: 12px; 
             padding: 14px; 
-            font-size: 14px; 
+            font-size: 13.5px; 
             font-family: monospace;
             outline: none; 
             background-color: #ffffff; 
@@ -547,25 +598,24 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             color: #ffffff; 
             border: none; 
             border-radius: 12px; 
-            font-size: 16px; 
+            font-size: 15px; 
             font-weight: 600; 
             cursor: pointer; 
-            margin-top: 20px; 
+            margin-top: 18px; 
             transition: background-color 0.2s ease;
             box-shadow: 0 4px 12px rgba(0, 112, 243, 0.2);
         }
-        .btn:hover { 
-            background-color: #005bb5; 
-        }
-        .output-container { margin-top: 24px; display: none; }
+        .btn:hover { background-color: #005bb5; }
+        
+        .output-container { margin-top: 22px; display: none; }
         .loader-box { 
             background: #f8fafc; 
             border: 1px solid #e2e8f0; 
             border-radius: 12px; 
-            padding: 16px; 
+            padding: 14px; 
         }
         .section-label { 
-            font-size: 14px; 
+            font-size: 13px; 
             font-weight: 600; 
             color: #0070f3; 
             margin-bottom: 8px; 
@@ -579,40 +629,187 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             border-radius: 8px;
             color: #1e293b;
             font-family: monospace;
-            font-size: 13px;
+            font-size: 12.5px;
             padding: 12px;
             white-space: nowrap;
             overflow-x: auto;
             resize: none;
         }
+
+        /* Settings Tab UI */
+        .setting-group {
+            margin-bottom: 18px;
+            background: #f8fafc;
+            padding: 14px 16px;
+            border-radius: 12px;
+            border: 1px solid #eef2f6;
+        }
+        .setting-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .setting-title {
+            font-size: 14px;
+            font-weight: 600;
+            color: #1e293b;
+        }
+        .setting-desc {
+            font-size: 12px;
+            color: #64748b;
+            margin-top: 4px;
+        }
+        .setting-select, .setting-input {
+            padding: 8px 12px;
+            border: 1px solid #cbd5e1;
+            border-radius: 8px;
+            font-size: 13px;
+            outline: none;
+            background: #ffffff;
+            color: #1e293b;
+        }
+        
+        /* Switch Toggle */
+        .switch {
+            position: relative;
+            display: inline-block;
+            width: 44px;
+            height: 24px;
+        }
+        .switch input { opacity: 0; width: 0; height: 0; }
+        .slider {
+            position: absolute; cursor: pointer; top: 0; left: 0; right: 0; bottom: 0;
+            background-color: #cbd5e1;
+            transition: .3s;
+            border-radius: 24px;
+        }
+        .slider:before {
+            position: absolute; content: ""; height: 18px; width: 18px; left: 3px; bottom: 3px;
+            background-color: white;
+            transition: .3s;
+            border-radius: 50%;
+        }
+        input:checked + .slider { background-color: #0070f3; }
+        input:checked + .slider:before { transform: translateX(20px); }
     </style>
 </head>
 <body>
     <div class="card">
         <h1>Classicfuscator</h1>
 
-        <div class="file-upload-box" id="dropZone" onclick="document.getElementById('luaFileInput').click()">
-            <span class="file-upload-title">Upload a Lua File:</span>
-            <p class="file-upload-subtext" id="dropSubtext">Click to choose or drag & drop file here (.lua, .txt)</p>
-            <input type="file" id="luaFileInput" accept=".lua,.luau,.txt" onchange="handleFileSelect(event)" style="display: none;">
+        <!-- Category Navigation Tabs -->
+        <div class="tab-nav">
+            <button class="tab-btn active" onclick="switchTab('obfuscatorTab', this)">Category 1: Obfuscator</button>
+            <button class="tab-btn" onclick="switchTab('settingsTab', this)">Category 2: Settings</button>
         </div>
 
-        <div class="or-text">Or paste your Roblox Lua code here:</div>
+        <!-- CATEGORY 1: OBFUSCATOR -->
+        <div id="obfuscatorTab" class="tab-content active">
+            <div class="file-upload-box" id="dropZone" onclick="document.getElementById('luaFileInput').click()">
+                <span class="file-upload-title">Upload a Lua File:</span>
+                <p class="file-upload-subtext" id="dropSubtext">Click to choose or drag & drop file (.lua, .txt)</p>
+                <input type="file" id="luaFileInput" accept=".lua,.luau,.txt" onchange="handleFileSelect(event)" style="display: none;">
+            </div>
 
-        <textarea id="input" placeholder=""></textarea>
+            <div class="or-text">Or paste your Roblox Lua script here:</div>
+            <textarea id="input" placeholder="print('Testing Classicfuscator Enterprise!')"></textarea>
 
-        <button class="btn" id="submitBtn" onclick="obfuscate()">Start Obfuscation</button>
+            <button class="btn" id="submitBtn" onclick="obfuscate()">Start Obfuscation</button>
 
-        <div class="output-container" id="outputWrapper">
-            <div class="loader-box">
-                <span class="section-label">Roblox Loader Script:</span>
-                <textarea id="loaderOutput" class="loader-text" readonly></textarea>
-                <button class="btn" id="copyBtn" style="background-color: #334155; color: #ffffff; box-shadow: none; margin-top: 10px;" onclick="copyLoader()">Copy Loader</button>
+            <div class="output-container" id="outputWrapper">
+                <div class="loader-box">
+                    <span class="section-label">Roblox Loader Script (1-Liner):</span>
+                    <textarea id="loaderOutput" class="loader-text" readonly></textarea>
+                    <button class="btn" id="copyBtn" style="background-color: #334155; color: #ffffff; box-shadow: none; margin-top: 10px;" onclick="copyLoader()">Copy Loader</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- CATEGORY 2: SETTINGS -->
+        <div id="settingsTab" class="tab-content">
+            <div class="setting-group">
+                <div class="setting-header">
+                    <div>
+                        <div class="setting-title">VM Virtualization Layers</div>
+                        <div class="setting-desc">Number of nested VM execution shells (1-5 layers).</div>
+                    </div>
+                    <select id="cfgLayers" class="setting-select">
+                        <option value="1" selected>1 Layer (Standard)</option>
+                        <option value="2">2 Layers (Double Shell)</option>
+                        <option value="3">3 Layers (Hardened)</option>
+                        <option value="4">4 Layers (Deep Fortress)</option>
+                        <option value="5">5 Layers (Maximum)</option>
+                    </select>
+                </div>
+            </div>
+
+            <div class="setting-group">
+                <div class="setting-header">
+                    <div>
+                        <div class="setting-title">Anti-Hook & Sentinel Matrix</div>
+                        <div class="setting-desc">Inspects callstack, C-closures, and catches hooks.</div>
+                    </div>
+                    <label class="switch">
+                        <input type="checkbox" id="cfgAntiHook" checked>
+                        <span class="slider"></span>
+                    </label>
+                </div>
+            </div>
+
+            <div class="setting-group">
+                <div class="setting-header">
+                    <div>
+                        <div class="setting-title">Rolling-Key String Cryptography</div>
+                        <div class="setting-desc">Encrypts literals with positional rolling keys.</div>
+                    </div>
+                    <label class="switch">
+                        <input type="checkbox" id="cfgStringEnc" checked>
+                        <span class="slider"></span>
+                    </label>
+                </div>
+            </div>
+
+            <div class="setting-group">
+                <div class="setting-header">
+                    <div>
+                        <div class="setting-title">Homoglyphic Variable Scrambler</div>
+                        <div class="setting-desc">Transforms variables into lookalike tokens.</div>
+                    </div>
+                    <label class="switch">
+                        <input type="checkbox" id="cfgHomoglyphs" checked>
+                        <span class="slider"></span>
+                    </label>
+                </div>
+            </div>
+
+            <div class="setting-group">
+                <div class="setting-header">
+                    <div>
+                        <div class="setting-title">Constant & Invariant Mutation</div>
+                        <div class="setting-desc">Mutates numbers, booleans, and nil into formulas.</div>
+                    </div>
+                    <label class="switch">
+                        <input type="checkbox" id="cfgNumberMut" checked>
+                        <span class="slider"></span>
+                    </label>
+                </div>
+            </div>
+
+            <div class="setting-group">
+                <div class="setting-title" style="margin-bottom: 6px;">Custom Watermark Header</div>
+                <input type="text" id="cfgWatermark" class="setting-input" style="width: 100%;" placeholder="e.g. Classicfuscator Enterprise v15.0">
             </div>
         </div>
     </div>
 
     <script>
+        function switchTab(tabId, btn) {
+            document.querySelectorAll('.tab-content').forEach(el => el.classList.remove('active'));
+            document.querySelectorAll('.tab-btn').forEach(el => el.classList.remove('active'));
+            document.getElementById(tabId).classList.add('active');
+            btn.classList.add('active');
+        }
+
         const dropZone = document.getElementById('dropZone');
 
         ['dragenter', 'dragover'].forEach(eventName => {
@@ -634,16 +831,12 @@ HTML_TEMPLATE = """<!DOCTYPE html>
         dropZone.addEventListener('drop', (e) => {
             const dt = e.dataTransfer;
             const files = dt.files;
-            if (files.length > 0) {
-                readFileContent(files[0]);
-            }
+            if (files.length > 0) readFileContent(files[0]);
         });
 
         function handleFileSelect(event) {
             const files = event.target.files;
-            if (files.length > 0) {
-                readFileContent(files[0]);
-            }
+            if (files.length > 0) readFileContent(files[0]);
         }
 
         function readFileContent(file) {
@@ -667,15 +860,27 @@ HTML_TEMPLATE = """<!DOCTYPE html>
                 return;
             }
 
+            const settings = {
+                layers: parseInt(document.getElementById('cfgLayers').value) || 1,
+                antihook: document.getElementById('cfgAntiHook').checked,
+                string_enc: document.getElementById('cfgStringEnc').checked,
+                homoglyphs: document.getElementById('cfgHomoglyphs').checked,
+                number_mut: document.getElementById('cfgNumberMut').checked,
+                watermark: document.getElementById('cfgWatermark').value
+            };
+
             outputWrapper.style.display = "block";
-            loaderArea.value = "-- Validating syntax & compiling S-Tier pipeline...";
+            loaderArea.value = "-- Validating syntax & compiling " + settings.layers + "-layer VM pipeline...";
             submitBtn.innerText = "Processing...";
 
             try {
                 const response = await fetch('/obfuscate', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ code: inputCode })
+                    body: JSON.stringify({ 
+                        code: inputCode,
+                        settings: settings
+                    })
                 });
 
                 const data = await response.json();
@@ -712,39 +917,10 @@ PROTECTED_HTML_TEMPLATE = """<!DOCTYPE html>
     <title>Protected By Classicfuscator</title>
     <style>
         * { box-sizing: border-box; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }
-        body { 
-            background-color: #f2f4f8; 
-            color: #1e293b; 
-            margin: 0; 
-            padding: 20px; 
-            display: flex; 
-            justify-content: center; 
-            align-items: center; 
-            min-height: 100vh; 
-        }
-        .card { 
-            background: #ffffff; 
-            border-radius: 20px; 
-            box-shadow: 0 4px 20px rgba(0, 0, 0, 0.04); 
-            width: 100%; 
-            max-width: 440px; 
-            padding: 40px 28px; 
-            border: 1px solid #eef0f4; 
-            text-align: center; 
-        }
-        h1 { 
-            font-size: 24px; 
-            font-weight: 700; 
-            color: #1a1a1a; 
-            margin: 0 0 10px 0; 
-            letter-spacing: -0.3px;
-        }
-        p { 
-            font-size: 15px; 
-            color: #64748b; 
-            margin: 0; 
-            font-weight: 500;
-        }
+        body { background-color: #f2f4f8; color: #1e293b; margin: 0; padding: 20px; display: flex; justify-content: center; align-items: center; min-height: 100vh; }
+        .card { background: #ffffff; border-radius: 20px; box-shadow: 0 4px 20px rgba(0, 0, 0, 0.04); width: 100%; max-width: 440px; padding: 40px 28px; border: 1px solid #eef0f4; text-align: center; }
+        h1 { font-size: 24px; font-weight: 700; color: #1a1a1a; margin: 0 0 10px 0; }
+        p { font-size: 15px; color: #64748b; margin: 0; }
     </style>
 </head>
 <body>
@@ -766,15 +942,14 @@ def index():
 def process():
     data = request.get_json(silent=True) or {}
     raw_code = data.get("code", "")
+    settings = data.get("settings", {})
     
-    # 1. Validation: Disallow empty input
     if not raw_code or not raw_code.strip():
         return jsonify({
             "success": False,
             "error": "Error: Input script cannot be empty."
         }), 400
 
-    # 2. Validation: Syntax Error Check
     is_valid, error_message = validate_lua_syntax(raw_code)
     if not is_valid:
         return jsonify({
@@ -783,7 +958,7 @@ def process():
         }), 400
     
     token = uuid.uuid4().hex
-    obfuscated_code = obfuscate_lua(raw_code, token)
+    obfuscated_code = obfuscate_pipeline(raw_code, settings)
     
     SCRIPT_CACHE[token] = {
         "code": obfuscated_code,
@@ -814,7 +989,6 @@ def process():
         if request.headers.get("X-Forwarded-Proto") == "https" or (domain_url.startswith("http://") and not ("127.0.0.1" in domain_url or "localhost" in domain_url)):
             domain_url = domain_url.replace("http://", "https://", 1)
 
-    # Clean 1-Liner Output
     loader_script = f'loadstring(game:HttpGet("{domain_url}/raw/{token}"))()'
 
     return jsonify({
